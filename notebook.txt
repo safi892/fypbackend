@@ -1,0 +1,556 @@
+input 
+import os
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+MODEL_PATH = "/kaggle/input/datasets/saffigaming/comment-expplanantiom01/codet5_commenst_expla/checkpoint_best"
+
+# 🔥 NEW: Strong reasoning prompt
+def build_prompt(code):
+    return f"""
+You are an expert C++ code reviewer.
+
+Analyze the following code strictly based on LOGIC, not function or variable names.
+
+INSTRUCTIONS:
+1. First, explain what each condition or expression actually checks.
+2. Then describe what the function really does.
+3. If the logic contradicts the function name, report it as an issue.
+4. Add clear inline comments to the code.
+5. Be precise and avoid generic explanations.
+
+OUTPUT FORMAT:
+
+### COMMENTED CODE
+<code with inline comments>
+
+### LOGIC ANALYSIS
+<step-by-step explanation of conditions and operations>
+
+### ISSUES
+<list any bugs, mismatches, or problems. If none, write "None">
+
+### EXPLANATION
+<final clean summary>
+
+CODE:
+{code}
+"""
+
+def clean_duplicate_code(output):
+    """Remove duplicate function blocks if model repeats"""
+    parts = output.split("### COMMENTED CODE")
+    if len(parts) > 2:
+        return "### COMMENTED CODE" + parts[-1]
+    return output
+
+def run_test(code_snippet):
+    if not os.path.exists(MODEL_PATH):
+        print(f"❌ Error: Model path not found at {MODEL_PATH}")
+        return
+
+    print("⏳ Loading model...")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_PATH)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+
+    # 🔥 Use improved prompt
+    prompt = build_prompt(code_snippet)
+
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt",
+        max_length=512,
+        truncation=True,
+    ).to(device)
+
+    print("🚀 Generating analysis...")
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_length=900,
+            num_beams=5,
+            temperature=0.7,
+            no_repeat_ngram_size=3,
+            early_stopping=True,
+        )
+
+    full_output = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+
+    # 🔥 Clean duplicates
+    full_output = clean_duplicate_code(full_output)
+
+    print("\n" + "="*60)
+    print("INPUT CODE:")
+    print(code_snippet.strip())
+    print("="*60)
+    print("MODEL OUTPUT:")
+    print(full_output.strip())
+    print("="*60)
+
+# 2. PASTE YOUR C++ CODE HERE
+test_cases = {
+
+# ---------------- EASY ----------------
+
+"EASY 1 (Print Sum Instead of Return)": """
+void sumArray(vector<int>& arr) {
+    int sum = 0;
+    for (int i = 0; i < arr.size(); i++) {
+        sum += arr[i];
+    }
+    cout << sum;
+}
+""",
+
+"EASY 2 (Odd Check)": """
+bool isOdd(int n) {
+    return n % 2 == 0;
+}
+""",
+
+"EASY 3 (Max of Two using Ternary)": """
+int maxOfTwo(int a, int b) {
+    return (a > b) ? a : b;
+}
+""",
+
+"EASY 4 (Average of Array)": """
+double average(vector<int>& arr) {
+    int sum = 0;
+    for (int x : arr) {
+        sum += x;
+    }
+    return (double)sum / arr.size();
+}
+""",
+
+# ---------------- MEDIUM ----------------
+
+"MEDIUM 1 (Bubble Sort)": """
+void bubbleSort(int arr[], int n) {
+    for (int i = 0; i < n-1; i++) {
+        for (int j = 0; j < n-i-1; j++) {
+            if (arr[j] > arr[j+1]) {
+                int temp = arr[j];
+                arr[j] = arr[j+1];
+                arr[j+1] = temp;
+            }
+        }
+    }
+}
+""",
+
+"MEDIUM 2 (Reverse String)": """
+string reverseStr(string str) {
+    int n = str.length();
+    for (int i = 0; i < n / 2; i++)
+        swap(str[i], str[n - i - 1]);
+    return str;
+}
+""",
+
+"MEDIUM 3 (Find Maximum Using Loop)": """
+int findMax(vector<int>& arr) {
+    int mx = arr[0];
+    for (int i = 1; i < arr.size(); i++) {
+        if (arr[i] > mx) {
+            mx = arr[i];
+        }
+    }
+    return mx;
+}
+""",
+
+"MEDIUM 4 (Linear Search)": """
+int findElement(vector<int>& arr, int target) {
+    for (int i = 0; i < arr.size(); i++) {
+        if (arr[i] == target)
+            return i;
+    }
+    return -1;
+}
+""",
+
+# ---------------- HARD ----------------
+
+"HARD 1 (Linked List Insert End)": """
+void insertAtEnd(Node*& head, int data) {
+    Node* newNode = new Node(data);
+    if (head == nullptr) {
+        head = newNode;
+        return;
+    }
+    Node* temp = head;
+    while (temp->next != nullptr) {
+        temp = temp->next;
+    }
+    temp->next = newNode;
+}
+""",
+
+"HARD 2 (Fibonacci Memoization)": """
+int fib(int n, int memo[]) {
+    if (memo[n] != -1) return memo[n];
+    if (n <= 1) return n;
+    memo[n] = fib(n-1, memo) + fib(n-2, memo);
+    return memo[n];
+}
+""",
+
+"HARD 3 (Duplicate Detection using HashSet)": """
+bool containsDuplicate(vector<int>& nums) {
+    unordered_set<int> seen;
+    for (int x : nums) {
+        if (seen.count(x)) {
+            return true;
+        }
+        seen.insert(x);
+    }
+    return false;
+}
+""",
+
+"HARD 4 (Binary Search)": """
+int binarySearch(vector<int>& arr, int target) {
+    int left = 0;
+    int right = arr.size() - 1;
+
+    while (left <= right) {
+        int mid = (left + right) / 2;
+
+        if (arr[mid] == target)
+            return mid;
+
+        if (arr[mid] < target)
+            left = mid + 1;
+        else
+            right = mid - 1;
+    }
+
+    return -1;
+}
+""",
+
+"HARD 5 (Factorial Iterative)": """
+int factorial(int n) {
+    int result = 1;
+    for (int i = 2; i <= n; i++) {
+        result *= i;
+    }
+    return result;
+}
+""",
+
+"HARD 6 (STL Accumulate Sum)": """
+int sum(vector<int>& v) {
+    return accumulate(v.begin(), v.end(), 0);
+}
+"""
+
+}
+
+# 3. RUN INFERENCE ENGINE
+if not os.path.exists(MODEL_PATH):
+    print(f"❌ Model not found at {MODEL_PATH}")
+else:
+    print("⏳ Loading model...")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_PATH)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device).eval()
+    for name, code in test_cases.items():
+        print(f"\n🚀 Testing {name}...")
+        inputs = tokenizer(code.strip(), return_tensors="pt", truncation=True).to(device)
+        
+        with torch.no_grad():
+            out_ids = model.generate(**inputs, max_length=768, num_beams=4)
+        
+        full_output = tokenizer.decode(out_ids[0], skip_special_tokens=True)
+        
+        if "===EXPLANATION===" in full_output:
+            out_code, out_expl = full_output.split("===EXPLANATION===", 1)
+        else:
+            out_code, out_expl = full_output, "None"
+        print("="*60)
+        print(f"RESULT FOR {name}:")
+        print("-" * 30)
+        print(out_code.strip())
+        print(f"\nEXPLANATION: {out_expl.strip()}")
+        print("="*60)
+
+
+
+
+
+
+
+
+
+
+
+output 
+
+
+⏳ Loading model...
+Loading widget...
+
+🚀 Testing EASY 1 (Print Sum Instead of Return)...
+============================================================
+RESULT FOR EASY 1 (Print Sum Instead of Return):
+------------------------------
+void sumArray(vector<int>& arr) {
+    int sum = 0; // Initialize sum to 0
+    for (int i = 0; i < arr.size(); i++) { // Loop through each element in the vector
+        sum += arr[i]; // Add the current element to sum
+    }
+    cout << sum; // Output the final sum
+}
+
+EXPLANATION: The function calculates the sum of all elements in the vector. It iterates through each element, adding it to the sum, and prints the result.
+============================================================
+
+🚀 Testing EASY 2 (Odd Check)...
+============================================================
+RESULT FOR EASY 2 (Odd Check):
+------------------------------
+bool isOdd(int n) {
+    // Check if n is odd by testing divisibility by 2
+    return n % 2 == 0;
+}
+
+EXPLANATION: The function checks if a number is odd by testing divisibility by 2. It returns true if n is odd, otherwise false.
+============================================================
+
+🚀 Testing EASY 3 (Max of Two using Ternary)...
+============================================================
+RESULT FOR EASY 3 (Max of Two using Ternary):
+------------------------------
+int maxOfTwo(int a, int b) {
+    // Return the larger of two
+    return (a > b)? a : b;
+}
+
+EXPLANATION: The function returns the larger of two. It returns a if a > b, else returns b.
+============================================================
+
+🚀 Testing EASY 4 (Average of Array)...
+============================================================
+RESULT FOR EASY 4 (Average of Array):
+------------------------------
+double average(vector<int>& arr) {
+    int sum = 0; // Initialize sum to 0
+    for (int x : arr) { // Loop through each element in the vector
+        sum += x; // Add the element to the sum
+    }
+    return (double)sum / arr.size(); // Return the average as a double
+}
+
+EXPLANATION: The function calculates the average of the elements in a vector by summing them and dividing by the vector size.
+============================================================
+
+🚀 Testing MEDIUM 1 (Bubble Sort)...
+============================================================
+RESULT FOR MEDIUM 1 (Bubble Sort):
+------------------------------
+void bubbleSort(int arr[], int n) {
+    for (int i = 0; i < n-1; i++) { // Outer loop for first element
+        for (int j = 0; j < n-i-1; j++) { // Inner loop for second element
+            if (arr[j] > arr[j+1]) { // Check if current and next elements are larger
+                int temp = arr[j]; // Save current element
+                arr[j] = arr[j+1]; // Swap elements
+                arr[j+1] = temp; // Update next element
+            }
+        }
+    }
+}
+
+EXPLANATION: The function performs bubble sort on an array by swapping elements when they are larger than the next. It uses nested loops to check each element and swap the next elements if they are larger.
+============================================================
+
+🚀 Testing MEDIUM 2 (Reverse String)...
+============================================================
+RESULT FOR MEDIUM 2 (Reverse String):
+------------------------------
+string reverseStr(string str) {
+    int n = str.length(); // Get the length of the input string
+    for (int i = 0; i < n / 2; i++) // Loop from start to middle
+        swap(str[i], str[n - i - 1]); // Swap characters at positions i and n-i-1
+    return str; // Return the reversed string
+}
+
+EXPLANATION: The function reverses a string by swapping characters at positions i and n-i-1, then returns the modified string.
+============================================================
+
+🚀 Testing MEDIUM 3 (Find Maximum Using Loop)...
+============================================================
+RESULT FOR MEDIUM 3 (Find Maximum Using Loop):
+------------------------------
+int findMax(vector<int>& arr) {
+    int mx = arr[0];  // Start with the first element as the max
+    for (int i = 1; i < arr.size(); i++) {  // Loop through the rest of the array
+        if (arr[i] > mx) {  // If current element is greater than max
+            mx = arr[i];  // Update max
+        }
+    }
+    return mx;  // Return the maximum element found
+}
+
+EXPLANATION: The function finds the maximum element in a vector by starting with the first element and iterating through the rest of the array.
+============================================================
+
+🚀 Testing MEDIUM 4 (Linear Search)...
+============================================================
+RESULT FOR MEDIUM 4 (Linear Search):
+------------------------------
+int findElement(vector<int>& arr, int target) {
+    // Iterate through each element in the vector
+    for (int i = 0; i < arr.size(); i++) {
+        // If current element matches target, return index
+        if (arr[i] == target)
+            return i;
+    }
+    // If no element found, return -1
+    return -1;
+}
+
+EXPLANATION: The function finds the index of the target element in the vector. If found, it returns the index; otherwise, -1.
+============================================================
+
+🚀 Testing HARD 1 (Linked List Insert End)...
+============================================================
+RESULT FOR HARD 1 (Linked List Insert End):
+------------------------------
+void insertAtEnd(Node*& head, int data) {
+    Node* newNode = new Node(data);
+    if (head == nullptr) {
+        head = newNode;
+        return;
+    }
+    Node* temp = head;
+    while (temp->next!= nullptr) {
+        temp = temp->next;
+    }
+    temp->next = newNode;
+}
+
+// Commented code
+void insertAtEnd(Node*& head, int data) {
+    // Create a new node
+    Node* newNode = new Node(data);
+    // If the list is empty, set the head to the new node
+    if (head == nullptr) {
+        head = newNode;
+        return;
+    }
+    // Start from the head
+    Node* temp = head;
+    // Traverse the list
+    while (temp->next!= nullptr) {
+        // Move to the next node
+        temp = temp->next;
+    }
+    // Add the new node to the end of the list
+    temp->next = newNode;
+}
+
+EXPLANATION: This function inserts a new node at the end of a linked list. It iterates through the list, moving to the next node, and adds the new node to the end.
+============================================================
+
+🚀 Testing HARD 2 (Fibonacci Memoization)...
+============================================================
+RESULT FOR HARD 2 (Fibonacci Memoization):
+------------------------------
+int fib(int n, int memo[]) {
+    // If memo[n] already computed, return it
+    if (memo[n]!= -1) return memo[n];
+    // Base case: if n is 0 or 1, return n
+    if (n <= 1) return n;
+    // Recursively compute next Fibonacci number
+    memo[n] = fib(n-1, memo) + fib(n-2, memo);
+    // Return the computed value
+    return memo[n];
+}
+
+EXPLANATION: The function calculates the nth Fibonacci number using recursion and memoization. It returns the computed value or -1 if no such number exists.
+============================================================
+
+🚀 Testing HARD 3 (Duplicate Detection using HashSet)...
+============================================================
+RESULT FOR HARD 3 (Duplicate Detection using HashSet):
+------------------------------
+bool containsDuplicate(vector<int>& nums) {
+    // Create a set to track seen numbers
+    unordered_set<int> seen;
+    // Iterate through each element in the vector
+    for (int x : nums) {
+        // If the number is already in the set, return true
+        if (seen.count(x)) {
+            return true;
+        }
+        // Add the number to the set
+        seen.insert(x);
+    }
+    // If no duplicate numbers found, return false
+    return false;
+}
+
+EXPLANATION: The function checks if any number in the vector has a duplicate number by using a set to track seen numbers. It returns true if any duplicate exists, otherwise false.
+============================================================
+
+🚀 Testing HARD 4 (Binary Search)...
+============================================================
+RESULT FOR HARD 4 (Binary Search):
+------------------------------
+int binarySearch(vector<int>& arr, int target) {
+    int left = 0; // Initialize left pointer
+    int right = arr.size() - 1; // Initialize right pointer
+
+    while (left <= right) { // Continue while pointers meet
+        int mid = (left + right) / 2; // Calculate middle index
+
+        if (arr[mid] == target)
+            return mid; // Return mid if target found
+
+        if (arr[mid] < target)
+            left = mid + 1; // Move left pointer right
+        else
+            right = mid - 1; // Move right pointer left
+    }
+
+    return -1; // No target found
+}
+
+EXPLANATION: The function finds the smallest index of the target in a vector where elements are equal. It uses binary search to find the smallest index.
+============================================================
+
+🚀 Testing HARD 5 (Factorial Iterative)...
+============================================================
+RESULT FOR HARD 5 (Factorial Iterative):
+------------------------------
+int factorial(int n) {
+    int result = 1;  // Initialize result to 1
+    for (int i = 2; i <= n; i++) {  // Loop from 2 to n
+        result *= i;  // Multiply result by current i
+    }
+    return result;  // Return the final factorial
+}
+
+EXPLANATION: The function calculates the factorial of n by multiplying it by each number from 2 to n.
+============================================================
+
+🚀 Testing HARD 6 (STL Accumulate Sum)...
+============================================================
+RESULT FOR HARD 6 (STL Accumulate Sum):
+------------------------------
+int sum(vector<int>& v) {
+    // Return the sum of the first element of the vector
+    return accumulate(v.begin(), v.end(), 0);
+}
+
+EXPLANATION: The function calculates the sum of the first element of a vector. It uses the accumulate function from the std::vector class to accumulate elements.
+============================================================
