@@ -4,6 +4,9 @@ import threading
 from typing import Optional, Tuple
 
 import torch
+from code_formatting import clean_duplicate_code, format_commented_code_for_editor
+from comment_rules import generate_rule_based_comments, has_meaningful_comments
+from explanation_rules import generate_rule_based_explanation, has_meaningful_explanation
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -18,18 +21,20 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     input_code: str
     commented_code: str
-    logic_analysis: str
-    issues: str
     explanation: str
-    raw_output: str
-    received_chars: int
-    source: Optional[str] = None
 
 
 app = FastAPI(title="Code Analyzer API", version="0.1.0")
 
-MODEL_PATH = os.getenv("MODEL_PATH", "/Volumes/Data/saffi/back/models")
+MODEL_PATH = os.getenv(
+    "MODEL_PATH",
+    "/Volumes/Data/saffi/back/codet5_commenst_expla/checkpoint_best",
+)
 TOKENIZER_PATH = os.getenv("TOKENIZER_PATH", MODEL_PATH)
+RAW_MAX_LENGTH = int(os.getenv("RAW_MAX_LENGTH", "768"))
+RAW_NUM_BEAMS = int(os.getenv("RAW_NUM_BEAMS", "4"))
+PROMPT_MAX_LENGTH = int(os.getenv("PROMPT_MAX_LENGTH", "900"))
+PROMPT_NUM_BEAMS = int(os.getenv("PROMPT_NUM_BEAMS", "5"))
 _MODEL_LOCK = threading.Lock()
 _MODEL_CACHE: Optional[Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]] = None
 
@@ -78,12 +83,14 @@ CODE:
 {code}
 """
 
-
-def clean_duplicate_code(output: str) -> str:
-    parts = output.split("### COMMENTED CODE")
-    if len(parts) > 2:
-        return "### COMMENTED CODE" + parts[-1]
-    return output
+def _looks_like_prompt_echo(output: str) -> bool:
+    markers = (
+        "<code with inline comments>",
+        "<step-by-step explanation",
+        "<final clean summary>",
+        "OUTPUT FORMAT",
+    )
+    return any(marker in output for marker in markers)
 
 
 def parse_model_output(output: str, input_code: str) -> AnalyzeResponse:
@@ -91,8 +98,6 @@ def parse_model_output(output: str, input_code: str) -> AnalyzeResponse:
     normalized = cleaned_output.replace("\r\n", "\n")
 
     commented_code = ""
-    logic_analysis = ""
-    issues = ""
     explanation = ""
 
     section_pattern = re.compile(
@@ -110,8 +115,6 @@ def parse_model_output(output: str, input_code: str) -> AnalyzeResponse:
             sections[title] = normalized[start:end].strip()
 
         commented_code = sections.get("COMMENTED CODE", "")
-        logic_analysis = sections.get("LOGIC ANALYSIS", "")
-        issues = sections.get("ISSUES", "")
         explanation = sections.get("EXPLANATION", "")
     elif "===EXPLANATION===" in normalized:
         commented_code, explanation = normalized.split("===EXPLANATION===", 1)
@@ -128,22 +131,70 @@ def parse_model_output(output: str, input_code: str) -> AnalyzeResponse:
     if not commented_code:
         commented_code = input_code.strip()
 
-    if not explanation:
-        explanation = "None"
+    if not has_meaningful_comments(commented_code):
+        commented_code = generate_rule_based_comments(input_code.strip())
 
-    if not issues:
-        issues = "None"
+    commented_code = format_commented_code_for_editor(commented_code)
+
+    if not has_meaningful_explanation(explanation):
+        explanation = generate_rule_based_explanation(input_code.strip())
 
     return AnalyzeResponse(
         input_code=input_code.strip(),
         commented_code=commented_code,
-        logic_analysis=logic_analysis,
-        issues=issues,
         explanation=explanation,
-        raw_output=cleaned_output,
-        received_chars=len(input_code),
-        source=None,
     )
+
+
+def parse_basic_output(output: str, input_code: str) -> AnalyzeResponse:
+    cleaned_output = clean_duplicate_code(output).strip()
+    if "===EXPLANATION===" in cleaned_output:
+        commented_code, explanation = cleaned_output.split("===EXPLANATION===", 1)
+        commented_code = commented_code.strip()
+        explanation = explanation.strip()
+    else:
+        commented_code = cleaned_output
+        explanation = "None"
+
+    if not commented_code:
+        commented_code = input_code.strip()
+
+    if not has_meaningful_comments(commented_code):
+        commented_code = generate_rule_based_comments(input_code.strip())
+
+    commented_code = format_commented_code_for_editor(commented_code)
+
+    if not has_meaningful_explanation(explanation):
+        explanation = generate_rule_based_explanation(input_code.strip())
+
+    return AnalyzeResponse(
+        input_code=input_code.strip(),
+        commented_code=commented_code,
+        explanation=explanation,
+    )
+
+
+def _generate_output(
+    tokenizer: AutoTokenizer,
+    model: AutoModelForSeq2SeqLM,
+    device: torch.device,
+    text: str,
+    generation_kwargs: dict[str, object],
+) -> str:
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        max_length=512,
+        truncation=True,
+    ).to(device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            **generation_kwargs,
+        )
+
+    return tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
 
 def _load_model() -> Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
@@ -187,26 +238,40 @@ def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     except (FileNotFoundError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    prompt = build_prompt(payload.code)
-    inputs = tokenizer(
-        prompt,
-        return_tensors="pt",
-        max_length=512,
-        truncation=True,
-    ).to(device)
+    # This checkpoint behaves best when it receives raw code, which matches the
+    # successful Kaggle notebook inference path.
+    full_output = _generate_output(
+        tokenizer,
+        model,
+        device,
+        payload.code,
+        generation_kwargs={
+            "max_length": RAW_MAX_LENGTH,
+            "num_beams": RAW_NUM_BEAMS,
+        },
+    )
 
-    with torch.no_grad():
-        output_ids = model.generate(
-            **inputs,
-            max_length=900,
-            num_beams=5,
-            do_sample=True,
-            temperature=0.7,
-            no_repeat_ngram_size=3,
-            early_stopping=True,
+    if "###" in full_output:
+        response = parse_model_output(full_output, payload.code)
+    elif "===EXPLANATION===" in full_output or full_output.strip() != payload.code.strip():
+        response = parse_basic_output(full_output, payload.code)
+    else:
+        prompt = build_prompt(payload.code)
+        full_output = _generate_output(
+            tokenizer,
+            model,
+            device,
+            prompt,
+            generation_kwargs={
+                "max_length": PROMPT_MAX_LENGTH,
+                "num_beams": PROMPT_NUM_BEAMS,
+                "no_repeat_ngram_size": 3,
+                "early_stopping": True,
+            },
         )
+        if _looks_like_prompt_echo(full_output):
+            response = parse_basic_output(payload.code, payload.code)
+        else:
+            response = parse_model_output(full_output, payload.code)
 
-    full_output = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-    response = parse_model_output(full_output, payload.code)
-    response.source = payload.source
     return response

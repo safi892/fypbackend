@@ -42,6 +42,7 @@ htmlcov/
 
 # Local model artifacts
 models/
+codet5_commenst_expla/
 
 # OS files
 .DS_Store
