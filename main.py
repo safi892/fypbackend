@@ -65,6 +65,22 @@ INSTRUCTIONS:
 4. Add clear inline comments to the code.
 5. Be precise and avoid generic explanations.
 
+COMMENT RULES:
+- Comment important declarations and initializations, not just loops and if statements.
+- Use context-aware comments that explain why a value is stored or checked.
+- Cover common edge cases such as empty input, null pointers, first/last index setup, and early returns.
+- Keep comments short and natural. Avoid repeating the code word-for-word.
+
+COMMENT EXAMPLES:
+- `int n = arr.size();` -> `// Store the array size for loop bounds or later checks`
+- `int left = 0;` -> `// Start the left pointer at the first position`
+- `int right = arr.size() - 1;` -> `// Start the right pointer at the last valid index`
+- `if (arr.empty()) return 0;` -> `// Handle the empty-input case early`
+- `Node* temp = head;` -> `// Start traversing from the head node`
+- `int mx = arr[0];` -> `// Use the first element as the initial maximum`
+- `bool found = false;` -> `// Track whether a matching value is found`
+- `return (double)sum / arr.size();` -> `// Return the average value`
+
 OUTPUT FORMAT:
 
 ### COMMENTED CODE

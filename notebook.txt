@@ -19,6 +19,22 @@ INSTRUCTIONS:
 4. Add clear inline comments to the code.
 5. Be precise and avoid generic explanations.
 
+COMMENT RULES:
+- Comment important declarations and initializations, not just loops and if statements.
+- Use context-aware comments that explain why a value is stored or checked.
+- Cover common edge cases such as empty input, null pointers, first/last index setup, and early returns.
+- Keep comments short and natural. Avoid repeating the code word-for-word.
+
+COMMENT EXAMPLES:
+- `int n = arr.size();` -> `// Store the array size for loop bounds or later checks`
+- `int left = 0;` -> `// Start the left pointer at the first position`
+- `int right = arr.size() - 1;` -> `// Start the right pointer at the last valid index`
+- `if (arr.empty()) return 0;` -> `// Handle the empty-input case early`
+- `Node* temp = head;` -> `// Start traversing from the head node`
+- `int mx = arr[0];` -> `// Use the first element as the initial maximum`
+- `bool found = false;` -> `// Track whether a matching value is found`
+- `return (double)sum / arr.size();` -> `// Return the average value`
+
 OUTPUT FORMAT:
 
 ### COMMENTED CODE
@@ -129,6 +145,22 @@ double average(vector<int>& arr) {
 }
 """,
 
+"EASY 5 (Capture Vector Size)": """
+int sizeCopy(vector<int>& arr) {
+    int n = arr.size();
+    return n;
+}
+""",
+
+"EASY 6 (Empty Check)": """
+int safeFirst(vector<int>& arr) {
+    if (arr.empty()) {
+        return -1;
+    }
+    return arr[0];
+}
+""",
+
 # ---------------- MEDIUM ----------------
 
 "MEDIUM 1 (Bubble Sort)": """
@@ -236,7 +268,17 @@ int binarySearch(vector<int>& arr, int target) {
 }
 """,
 
-"HARD 5 (Factorial Iterative)": """
+"HARD 5 (Linked List Traversal Setup)": """
+void printList(Node* head) {
+    Node* temp = head;
+    while (temp != nullptr) {
+        cout << temp->data << " ";
+        temp = temp->next;
+    }
+}
+""",
+
+"HARD 6 (Factorial Iterative)": """
 int factorial(int n) {
     int result = 1;
     for (int i = 2; i <= n; i++) {
@@ -246,7 +288,7 @@ int factorial(int n) {
 }
 """,
 
-"HARD 6 (STL Accumulate Sum)": """
+"HARD 7 (STL Accumulate Sum)": """
 int sum(vector<int>& v) {
     return accumulate(v.begin(), v.end(), 0);
 }
