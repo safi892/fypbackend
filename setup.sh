@@ -90,6 +90,20 @@ for name in config.json tokenizer.json model.safetensors; do
 done
 
 if [ ${#missing_files[@]} -gt 0 ]; then
+  if [ -f "$ROOT/download_model.py" ]; then
+    echo "Downloading model via download_model.py..."
+    "$VENV_PY" "$ROOT/download_model.py"
+  fi
+fi
+
+missing_files=()
+for name in config.json tokenizer.json model.safetensors; do
+  if [ ! -f "$MODEL_DIR/$name" ]; then
+    missing_files+=("$name")
+  fi
+done
+
+if [ ${#missing_files[@]} -gt 0 ]; then
   echo "Model files missing in $MODEL_DIR: ${missing_files[*]}"
   echo "Make sure the model folder is present or unzip codet5_commenst_expla.zip."
 else
