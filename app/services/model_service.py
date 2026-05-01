@@ -4,52 +4,17 @@ import threading
 from typing import Optional, Tuple
 
 import torch
-from code_formatting import clean_duplicate_code, format_commented_code_for_editor
-from comment_rules import generate_rule_based_comments, has_meaningful_comments
-from explanation_rules import generate_rule_based_explanation, has_meaningful_explanation
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-
-class AnalyzeRequest(BaseModel):
-    code: str = Field(..., min_length=1, description="Source code to analyze")
-    source: Optional[str] = Field(None, description="Client identifier, e.g. mobile")
-
-
-class AnalyzeResponse(BaseModel):
-    input_code: str
-    commented_code: str
-    explanation: str
+from app.core.config import MODEL_PATH, PROMPT_MAX_LENGTH, PROMPT_NUM_BEAMS, RAW_MAX_LENGTH, RAW_NUM_BEAMS, TOKENIZER_PATH
+from app.model_processing.code_formatting import clean_duplicate_code, format_commented_code_for_editor
+from app.model_processing.comment_rules import generate_rule_based_comments, has_meaningful_comments
+from app.model_processing.explanation_rules import generate_rule_based_explanation, has_meaningful_explanation
+from app.schemas.analyze import AnalyzeResponse
 
 
-app = FastAPI(title="Code Analyzer API", version="0.1.0")
-
-MODEL_PATH = os.getenv(
-    "MODEL_PATH",
-    "/Volumes/Data/saffi/back/codet5_commenst_expla/checkpoint_best",
-)
-TOKENIZER_PATH = os.getenv("TOKENIZER_PATH", MODEL_PATH)
-RAW_MAX_LENGTH = int(os.getenv("RAW_MAX_LENGTH", "768"))
-RAW_NUM_BEAMS = int(os.getenv("RAW_NUM_BEAMS", "4"))
-PROMPT_MAX_LENGTH = int(os.getenv("PROMPT_MAX_LENGTH", "900"))
-PROMPT_NUM_BEAMS = int(os.getenv("PROMPT_NUM_BEAMS", "5"))
 _MODEL_LOCK = threading.Lock()
 _MODEL_CACHE: Optional[Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]] = None
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/health")
-def health() -> dict:
-    return {"status": "ok"}
 
 
 def build_prompt(code: str) -> str:
@@ -71,16 +36,6 @@ COMMENT RULES:
 - Cover common edge cases such as empty input, null pointers, first/last index setup, and early returns.
 - Keep comments short and natural. Avoid repeating the code word-for-word.
 
-COMMENT EXAMPLES:
-- `int n = arr.size();` -> `// Store the array size for loop bounds or later checks`
-- `int left = 0;` -> `// Start the left pointer at the first position`
-- `int right = arr.size() - 1;` -> `// Start the right pointer at the last valid index`
-- `if (arr.empty()) return 0;` -> `// Handle the empty-input case early`
-- `Node* temp = head;` -> `// Start traversing from the head node`
-- `int mx = arr[0];` -> `// Use the first element as the initial maximum`
-- `bool found = false;` -> `// Track whether a matching value is found`
-- `return (double)sum / arr.size();` -> `// Return the average value`
-
 OUTPUT FORMAT:
 
 ### COMMENTED CODE
@@ -98,6 +53,7 @@ OUTPUT FORMAT:
 CODE:
 {code}
 """
+
 
 def _looks_like_prompt_echo(output: str) -> bool:
     markers = (
@@ -247,20 +203,14 @@ def _load_model() -> Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
         return _MODEL_CACHE
 
 
-@app.post("/analyze", response_model=AnalyzeResponse)
-def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
-    try:
-        tokenizer, model, device = _load_model()
-    except (FileNotFoundError, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+def analyze_code(code: str) -> AnalyzeResponse:
+    tokenizer, model, device = _load_model()
 
-    # This checkpoint behaves best when it receives raw code, which matches the
-    # successful Kaggle notebook inference path.
     full_output = _generate_output(
         tokenizer,
         model,
         device,
-        payload.code,
+        code,
         generation_kwargs={
             "max_length": RAW_MAX_LENGTH,
             "num_beams": RAW_NUM_BEAMS,
@@ -268,26 +218,26 @@ def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     )
 
     if "###" in full_output:
-        response = parse_model_output(full_output, payload.code)
-    elif "===EXPLANATION===" in full_output or full_output.strip() != payload.code.strip():
-        response = parse_basic_output(full_output, payload.code)
-    else:
-        prompt = build_prompt(payload.code)
-        full_output = _generate_output(
-            tokenizer,
-            model,
-            device,
-            prompt,
-            generation_kwargs={
-                "max_length": PROMPT_MAX_LENGTH,
-                "num_beams": PROMPT_NUM_BEAMS,
-                "no_repeat_ngram_size": 3,
-                "early_stopping": True,
-            },
-        )
-        if _looks_like_prompt_echo(full_output):
-            response = parse_basic_output(payload.code, payload.code)
-        else:
-            response = parse_model_output(full_output, payload.code)
+        return parse_model_output(full_output, code)
 
-    return response
+    if "===EXPLANATION===" in full_output or full_output.strip() != code.strip():
+        return parse_basic_output(full_output, code)
+
+    prompt = build_prompt(code)
+    full_output = _generate_output(
+        tokenizer,
+        model,
+        device,
+        prompt,
+        generation_kwargs={
+            "max_length": PROMPT_MAX_LENGTH,
+            "num_beams": PROMPT_NUM_BEAMS,
+            "no_repeat_ngram_size": 3,
+            "early_stopping": True,
+        },
+    )
+
+    if _looks_like_prompt_echo(full_output):
+        return parse_basic_output(code, code)
+
+    return parse_model_output(full_output, code)

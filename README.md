@@ -1,44 +1,17 @@
 ## Code Analyzer Backend
 
-This service exposes a FastAPI endpoint that analyzes source code using a local model.
+This service exposes a FastAPI endpoint that analyzes source code using a local model and a small SQLite auth layer.
 
-### Prerequisites
+Start here:
 
-- Python 3.11+
-- macOS or Linux shell. Windows users should use Git Bash or WSL.
+- [Setup](docs/SETUP.md)
+- [API Reference](docs/API.md)
+- [Auth and Database](docs/AUTH.md)
+- [Android Integration](docs/ANDROID.md)
 
-### Setup
+Project structure:
 
-On macOS/Linux (or Git Bash/WSL on Windows):
-
-```bash
-chmod +x setup.sh runserver.sh
-./setup.sh
-```
-
-### Run the server
-
-```bash
-./runserver.sh start
-```
-
-### Common commands
-
-```bash
-./runserver.sh status
-./runserver.sh logs
-./runserver.sh stop
-./runserver.sh restart
-```
-
-### Configuration
-
-Environment variables supported by the scripts:
-
-- `PORT` (default: `8000`)
-- `MODEL_PATH` and `TOKENIZER_PATH` are set automatically by `runserver.sh`
-
-### API
-
-- Health: `GET /health`
-- Analyze: `POST /analyze`
+- `app/` contains the FastAPI package
+- `app/main.py` is the FastAPI entrypoint
+- `runserver.sh` starts the API
+- `setup.sh` installs dependencies and prepares the model

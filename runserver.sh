@@ -31,14 +31,14 @@ venv_python() {
   fi
 }
 
-find_pid_by_port() {
-  local pid=""
+find_pids_by_port() {
+  local pids=""
   if command -v lsof >/dev/null 2>&1; then
-    pid=$(lsof -ti tcp:"$PORT" | head -n 1 || true)
+    pids=$(lsof -ti tcp:"$PORT" | sort -u || true)
   elif is_windows && command -v netstat >/dev/null 2>&1; then
-    pid=$(netstat -ano | awk -v port=":$PORT" '$1 ~ /TCP/ && $2 ~ port && $4 == "LISTENING" {print $5; exit}' || true)
+    pids=$(netstat -ano | awk -v port=":$PORT" '$1 ~ /TCP/ && $2 ~ port && $4 == "LISTENING" {print $5}' | sort -u || true)
   fi
-  echo "$pid"
+  echo "$pids"
 }
 
 stop_pid() {
@@ -51,6 +51,18 @@ stop_pid() {
   else
     kill "$pid" >/dev/null 2>&1 || true
   fi
+}
+
+stop_pids() {
+  local pids="$1"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+  while IFS= read -r pid; do
+    if [ -n "$pid" ]; then
+      stop_pid "$pid"
+    fi
+  done <<< "$pids"
 }
 
 start_server() {
@@ -68,15 +80,15 @@ start_server() {
     echo "Run ./setup.sh to extract or provide the model files."
   fi
 
-  local port_pid
-  port_pid="$(find_pid_by_port)"
-  if [ -n "$port_pid" ]; then
-    echo "Port $PORT is in use by PID $port_pid. Stopping it..."
-    stop_pid "$port_pid"
+  local port_pids
+  port_pids="$(find_pids_by_port)"
+  if [ -n "$port_pids" ]; then
+    echo "Port $PORT is in use by PID(s): $(echo "$port_pids" | tr '\n' ' ')"
+    stop_pids "$port_pids"
   fi
 
   echo "Starting server on port $PORT..."
-  "$venv_py" -m uvicorn main:app --host 0.0.0.0 --port "$PORT" > "$LOG_FILE" 2>&1 &
+  "$venv_py" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
   echo "Server started with PID $(cat "$PID_FILE"). Logs: $LOG_FILE"
 }
@@ -88,7 +100,7 @@ stop_server() {
   fi
 
   if [ -z "$pid" ]; then
-    pid="$(find_pid_by_port)"
+    pid="$(find_pids_by_port)"
   fi
 
   if [ -z "$pid" ]; then
@@ -96,8 +108,13 @@ stop_server() {
     return 0
   fi
 
-  echo "Stopping server (PID $pid)..."
-  stop_pid "$pid"
+  if [ -f "$PID_FILE" ]; then
+    echo "Stopping server (PID $pid)..."
+    stop_pid "$pid"
+  else
+    echo "Stopping server on port $PORT (PID(s): $(echo "$pid" | tr '\n' ' '))..."
+    stop_pids "$pid"
+  fi
   rm -f "$PID_FILE"
 }
 
@@ -112,9 +129,9 @@ status_server() {
     return 0
   fi
 
-  pid="$(find_pid_by_port)"
+  pid="$(find_pids_by_port)"
   if [ -n "$pid" ]; then
-    echo "Port $PORT is in use by PID $pid."
+    echo "Port $PORT is in use by PID(s): $(echo "$pid" | tr '\n' ' ')."
   else
     echo "Server not running."
   fi
