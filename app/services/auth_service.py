@@ -162,6 +162,11 @@ def current_user(authorization: Optional[str]) -> SessionUserResponse:
     return SessionUserResponse(user=user)
 
 
+def require_user(authorization: Optional[str]) -> AuthUser:
+    token = _get_bearer_token(authorization)
+    return _get_user_from_session(token)
+
+
 def logout_user(authorization: Optional[str]) -> TokenResponse:
     token = _get_bearer_token(authorization)
     _delete_session(token)

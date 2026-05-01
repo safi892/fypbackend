@@ -29,3 +29,7 @@ def startup_event() -> None:
 
 app.include_router(analyze_router)
 app.include_router(auth_router)
+
+
+
+

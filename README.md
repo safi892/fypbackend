@@ -15,3 +15,11 @@ Project structure:
 - `app/main.py` is the FastAPI entrypoint
 - `runserver.sh` starts the API
 - `setup.sh` installs dependencies and prepares the model
+
+
+
+
+
+
+
+

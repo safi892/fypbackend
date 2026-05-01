@@ -49,4 +49,30 @@ def initialize_database() -> None:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analysis_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    input_code TEXT NOT NULL,
+                    commented_code TEXT NOT NULL,
+                    explanation TEXT NOT NULL,
+                    source TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_analysis_history_user_id
+                ON analysis_history (user_id)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_analysis_history_created_at
+                ON analysis_history (created_at)
+                """
+            )
             connection.commit()
