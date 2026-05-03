@@ -1,14 +1,10 @@
-INFO:     Started server process [4370]
+INFO:     Started server process [4640]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     192.168.1.5:49971 - "GET / HTTP/1.1" 404 Not Found
-INFO:     192.168.1.5:49971 - "GET /favicon.ico HTTP/1.1" 404 Not Found
-INFO:     192.168.1.5:49971 - "GET / HTTP/1.1" 404 Not Found
-INFO:     192.168.1.5:49975 - "GET /health HTTP/1.1" 200 OK
-INFO:     192.168.1.7:38324 - "POST /analyze HTTP/1.1" 200 OK
-INFO:     192.168.1.7:38560 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     192.168.1.5:40078 - "GET /analyze/history?limit=20&offset=0 HTTP/1.1" 200 OK
+INFO:     192.168.1.2:42640 - "GET /analyze/history?limit=20&offset=0 HTTP/1.1" 200 OK
 INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
-INFO:     Finished server process [4370]
+INFO:     Finished server process [4640]
