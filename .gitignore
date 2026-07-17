@@ -44,5 +44,10 @@ htmlcov/
 models/
 codet5_commenst_expla/
 
+# Runtime files
+*.db
+*.pid
+logs/
+
 # OS files
 .DS_Store

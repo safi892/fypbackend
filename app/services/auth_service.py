@@ -1,17 +1,24 @@
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 
 from app.core.config import PASSWORD_HASH_ITERATIONS, SESSION_TTL_HOURS
 from app.core.database import get_db_connection, get_db_lock
-from app.schemas.auth import AuthResponse, AuthUser, SessionUserResponse, LoginRequest, RegisterRequest, TokenResponse
+from app.schemas.auth import (
+    AuthResponse,
+    AuthUser,
+    LoginRequest,
+    RegisterRequest,
+    SessionUserResponse,
+    TokenResponse,
+)
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _normalize_email(email: str) -> str:
@@ -36,7 +43,7 @@ def _verify_password(password: str, salt: str, password_hash: str) -> bool:
     return secrets.compare_digest(_hash_password(password, salt), password_hash)
 
 
-def _create_session(connection, user_id: int) -> str:
+def _create_session(connection: sqlite3.Connection, user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     created_at = _utc_now().isoformat()
     expires_at = (_utc_now() + timedelta(hours=SESSION_TTL_HOURS)).isoformat()
@@ -47,7 +54,7 @@ def _create_session(connection, user_id: int) -> str:
     return token
 
 
-def _get_bearer_token(authorization: Optional[str]) -> str:
+def _get_bearer_token(authorization: str | None) -> str:
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing authorization token")
 
@@ -76,7 +83,7 @@ def _get_user_from_session(token: str) -> AuthUser:
 
             expires_at = datetime.fromisoformat(session["expires_at"])
             if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = expires_at.replace(tzinfo=UTC)
             if expires_at <= _utc_now():
                 connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
                 connection.commit()
@@ -121,7 +128,7 @@ def register_user(payload: RegisterRequest) -> AuthResponse:
                 """,
                 (name, email, salt, password_hash, created_at),
             )
-            user_id = int(cursor.lastrowid)
+            user_id = int(cursor.lastrowid) if cursor.lastrowid is not None else 0
             token = _create_session(connection, user_id)
             connection.commit()
 
@@ -156,18 +163,18 @@ def login_user(payload: LoginRequest) -> AuthResponse:
     return AuthResponse(message="Login successful", token=token, user=auth_user)
 
 
-def current_user(authorization: Optional[str]) -> SessionUserResponse:
+def current_user(authorization: str | None) -> SessionUserResponse:
     token = _get_bearer_token(authorization)
     user = _get_user_from_session(token)
     return SessionUserResponse(user=user)
 
 
-def require_user(authorization: Optional[str]) -> AuthUser:
+def require_user(authorization: str | None) -> AuthUser:
     token = _get_bearer_token(authorization)
     return _get_user_from_session(token)
 
 
-def logout_user(authorization: Optional[str]) -> TokenResponse:
+def logout_user(authorization: str | None) -> TokenResponse:
     token = _get_bearer_token(authorization)
     _delete_session(token)
     return TokenResponse(message="Logged out successfully")

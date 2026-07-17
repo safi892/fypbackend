@@ -49,9 +49,9 @@ for %%f in (config.json tokenizer.json model.safetensors) do (
 if "!MISSING_FILES!"=="" (
   echo Model files found in %MODEL_DIR%.
 ) else (
-  if exist "%ROOT%download_model.py" (
+  if exist "%ROOT%scripts\download_model.py" (
     echo Downloading model via download_model.py...
-    "%VENV_PY%" "%ROOT%download_model.py"
+    "%VENV_PY%" "%ROOT%scripts\download_model.py"
   )
 )
 

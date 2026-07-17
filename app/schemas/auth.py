@@ -8,7 +8,9 @@ class RegisterRequest(BaseModel):
     email: str = Field(..., min_length=1, description="User email")
     password: str = Field(..., min_length=6, description="User password")
     confirm_password: str = Field(
-        ..., min_length=6, description="Password confirmation",
+        ...,
+        min_length=6,
+        description="Password confirmation",
         validation_alias=AliasChoices("confirm_password", "confirmPassword"),
     )
 

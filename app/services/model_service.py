@@ -1,26 +1,90 @@
+"""CodeT5 inference engine (shared AI backend).
+
+Problem solved: every generated output (comments + explanation) comes from one
+trained seq2seq model. To keep a single model load and a single code path, this
+module *only* runs the model and splits its raw output into sections. It does
+NOT apply rule-based fallbacks or formatting — those belong to the task-specific
+services (``comment_service``, ``explanation_service``) that consume this output.
+
+Why this separation: a later, dedicated model can replace ``run_model`` without
+touching any caller, and the raw output stays testable in isolation.
+"""
+
+from __future__ import annotations
+
 import os
 import re
 import threading
-from typing import Optional, Tuple
+from dataclasses import dataclass
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from app.core.config import MODEL_PATH, PROMPT_MAX_LENGTH, PROMPT_NUM_BEAMS, RAW_MAX_LENGTH, RAW_NUM_BEAMS, TOKENIZER_PATH
-from app.model_processing.code_formatting import clean_duplicate_code, format_commented_code_for_editor
-from app.model_processing.comment_rules import generate_rule_based_comments, has_meaningful_comments
-from app.model_processing.explanation_rules import generate_rule_based_explanation, has_meaningful_explanation
-from app.schemas.analyze import AnalyzeResponse
+from app.core.config import (
+    MODEL_PATH,
+    PROMPT_MAX_LENGTH,
+    PROMPT_NUM_BEAMS,
+    RAW_MAX_LENGTH,
+    RAW_NUM_BEAMS,
+    TOKENIZER_PATH,
+)
+from app.model_processing.code_formatting import clean_duplicate_code
+from app.schemas.analyze import StaticAnalysis
 
-
+# Guards one-time model load across threads.
 _MODEL_LOCK = threading.Lock()
-_MODEL_CACHE: Optional[Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]] = None
+_MODEL_CACHE: tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device] | None = None
 
 
-def build_prompt(code: str) -> str:
+@dataclass
+class RawModelOutput:
+    """Raw model output split into sections (either may be empty)."""
+
+    commented_code: str = ""
+    explanation: str = ""
+
+
+def _facts_block(analysis: StaticAnalysis | None) -> str:
+    """Render analyzer facts as a prompt preamble for the model.
+
+    Problem solved: feeding the model explicit ground-truth facts (instead of
+    letting it rediscover them) improves suggestion accuracy and lowers
+    inference cost. Why only a few key facts: keep the prompt short so the
+    model focuses on reasoning, not on re-parsing structure.
+
+    :param analysis: the static analysis, or ``None`` when not computed.
+    :return: a multi-line facts block, or ``""`` when no analysis exists.
+    """
+    if analysis is None:
+        return ""
+    facts: list[str] = [
+        f"- Functions: {analysis.function_count}",
+        f"- Recursive: {analysis.recursive}",
+        f"- Max nested loops: {analysis.max_nested_loops}",
+        f"- Cyclomatic complexity: {analysis.cyclomatic_complexity}",
+    ]
+    if analysis.long_functions:
+        facts.append(f"- Long functions: {', '.join(analysis.long_functions)}")
+    if analysis.missing_comments:
+        facts.append(f"- Functions missing comments: {analysis.missing_comments}")
+    return "\nSTATIC ANALYSIS FACTS (ground truth):\n" + "\n".join(facts) + "\n"
+
+
+def build_prompt(code: str, analysis: StaticAnalysis | None = None) -> str:
+    """Assemble the CodeT5 prompt from source code plus analyzer facts.
+
+    Problem solved: the model performs best with an explicit instruction
+    template (comment rules + output format). Why inject facts here: the router
+    passes the same structure every time, so formatting lives with the engine.
+
+    :param code: the C++ source to review.
+    :param analysis: optional static analysis to embed as ground-truth facts.
+    :return: the complete prompt string for the model.
+    """
+    facts = _facts_block(analysis)
     return f"""
 You are an expert C++ code reviewer.
-
+{facts}
 Analyze the following code strictly based on LOGIC, not function or variable names.
 
 INSTRUCTIONS:
@@ -33,7 +97,8 @@ INSTRUCTIONS:
 COMMENT RULES:
 - Comment important declarations and initializations, not just loops and if statements.
 - Use context-aware comments that explain why a value is stored or checked.
-- Cover common edge cases such as empty input, null pointers, first/last index setup, and early returns.
+- Cover common edge cases such as empty input, null pointers, first/last
+  index setup, and early returns.
 - Keep comments short and natural. Avoid repeating the code word-for-word.
 
 OUTPUT FORMAT:
@@ -41,11 +106,6 @@ OUTPUT FORMAT:
 ### COMMENTED CODE
 <code with inline comments>
 
-### LOGIC ANALYSIS
-<step-by-step explanation of conditions and operations>
-
-### ISSUES
-<list any bugs, mismatches, or problems. If none, write "None">
 
 ### EXPLANATION
 <final clean summary>
@@ -56,6 +116,16 @@ CODE:
 
 
 def _looks_like_prompt_echo(output: str) -> bool:
+    """Detect when the model merely echoed the prompt template back.
+
+    Problem solved: CodeT5 sometimes returns the literal placeholder text
+    ("<code with inline comments>") instead of real output. Why this matters:
+    such output is useless and must be discarded so the caller uses its
+    rule-engine fallback.
+
+    :param output: the raw model text.
+    :return: ``True`` if the output looks like a template echo.
+    """
     markers = (
         "<code with inline comments>",
         "<step-by-step explanation",
@@ -65,7 +135,17 @@ def _looks_like_prompt_echo(output: str) -> bool:
     return any(marker in output for marker in markers)
 
 
-def parse_model_output(output: str, input_code: str) -> AnalyzeResponse:
+def _parse_sections(output: str) -> RawModelOutput:
+    """Split raw model text into commented-code and explanation sections.
+
+    Problem solved: the model emits a few section headers; we normalise them
+    into a typed ``RawModelOutput``. Why multiple fallback strategies: different
+    checkpoints emit slightly different separators, so we try the known formats
+    in order before falling back to "all code".
+
+    :param output: the raw decoded model output.
+    :return: a ``RawModelOutput`` with whatever sections were found.
+    """
     cleaned_output = clean_duplicate_code(output).strip()
     normalized = cleaned_output.replace("\r\n", "\n")
 
@@ -100,50 +180,7 @@ def parse_model_output(output: str, input_code: str) -> AnalyzeResponse:
         else:
             commented_code = normalized
 
-    if not commented_code:
-        commented_code = input_code.strip()
-
-    if not has_meaningful_comments(commented_code):
-        commented_code = generate_rule_based_comments(input_code.strip())
-
-    commented_code = format_commented_code_for_editor(commented_code)
-
-    if not has_meaningful_explanation(explanation):
-        explanation = generate_rule_based_explanation(input_code.strip())
-
-    return AnalyzeResponse(
-        input_code=input_code.strip(),
-        commented_code=commented_code,
-        explanation=explanation,
-    )
-
-
-def parse_basic_output(output: str, input_code: str) -> AnalyzeResponse:
-    cleaned_output = clean_duplicate_code(output).strip()
-    if "===EXPLANATION===" in cleaned_output:
-        commented_code, explanation = cleaned_output.split("===EXPLANATION===", 1)
-        commented_code = commented_code.strip()
-        explanation = explanation.strip()
-    else:
-        commented_code = cleaned_output
-        explanation = "None"
-
-    if not commented_code:
-        commented_code = input_code.strip()
-
-    if not has_meaningful_comments(commented_code):
-        commented_code = generate_rule_based_comments(input_code.strip())
-
-    commented_code = format_commented_code_for_editor(commented_code)
-
-    if not has_meaningful_explanation(explanation):
-        explanation = generate_rule_based_explanation(input_code.strip())
-
-    return AnalyzeResponse(
-        input_code=input_code.strip(),
-        commented_code=commented_code,
-        explanation=explanation,
-    )
+    return RawModelOutput(commented_code=commented_code, explanation=explanation)
 
 
 def _generate_output(
@@ -153,6 +190,19 @@ def _generate_output(
     text: str,
     generation_kwargs: dict[str, object],
 ) -> str:
+    """Run one model generation and decode the output ids to text.
+
+    Problem solved: centralises tokenization + ``model.generate`` + decode so
+    ``run_model`` only decides *which* prompt to send. Why ``torch.no_grad()``:
+    inference needs no gradients, saving memory and compute.
+
+    :param tokenizer: the loaded tokenizer.
+    :param model: the loaded seq2seq model.
+    :param device: the torch device the model lives on.
+    :param text: the prompt to encode.
+    :param generation_kwargs: beam/length options forwarded to ``generate``.
+    :return: the decoded output string.
+    """
     inputs = tokenizer(
         text,
         return_tensors="pt",
@@ -166,10 +216,21 @@ def _generate_output(
             **generation_kwargs,
         )
 
-    return tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    return str(tokenizer.decode(output_ids[0], skip_special_tokens=True))
 
 
-def _load_model() -> Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
+def _load_model() -> tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
+    """Lazily load and cache the tokenizer + model on first use.
+
+    Problem solved: loading a torch model is slow and memory heavy, so it must
+    happen once. Why a lock + double-check: concurrent requests must not each
+    load their own copy. Why explicit error messages: a missing/corrupt model
+    directory must fail clearly rather than with an opaque stack trace.
+
+    :return: a cached ``(tokenizer, model, device)`` tuple.
+    :raises FileNotFoundError: if the model/tokenizer directory is absent.
+    :raises RuntimeError: if the tokenizer/model fails to load.
+    """
     global _MODEL_CACHE
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
@@ -180,7 +241,6 @@ def _load_model() -> Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
 
         if not os.path.exists(MODEL_PATH):
             raise FileNotFoundError(f"Model path not found: {MODEL_PATH}")
-
         if not os.path.isdir(MODEL_PATH):
             raise FileNotFoundError(f"Model directory not found: {MODEL_PATH}")
 
@@ -203,7 +263,18 @@ def _load_model() -> Tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
         return _MODEL_CACHE
 
 
-def analyze_code(code: str) -> AnalyzeResponse:
+def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutput:
+    """Run CodeT5 on the code and return the raw commented-code/explanation.
+
+    Problem solved: this is the single AI entry point. Why two strategies: if
+    the model already emitted sections for the raw code we use them; otherwise
+    we send the richer fact-augmented prompt. Why detect a prompt echo: a bad
+    output yields an empty ``RawModelOutput`` so the caller falls back cleanly.
+
+    :param code: the C++ source to analyze.
+    :param analysis: optional static analysis injected into the prompt.
+    :return: a ``RawModelOutput`` (either section may be empty).
+    """
     tokenizer, model, device = _load_model()
 
     full_output = _generate_output(
@@ -218,12 +289,12 @@ def analyze_code(code: str) -> AnalyzeResponse:
     )
 
     if "###" in full_output:
-        return parse_model_output(full_output, code)
+        return _parse_sections(full_output)
 
     if "===EXPLANATION===" in full_output or full_output.strip() != code.strip():
-        return parse_basic_output(full_output, code)
+        return _parse_sections(full_output)
 
-    prompt = build_prompt(code)
+    prompt = build_prompt(code, analysis)
     full_output = _generate_output(
         tokenizer,
         model,
@@ -238,6 +309,6 @@ def analyze_code(code: str) -> AnalyzeResponse:
     )
 
     if _looks_like_prompt_echo(full_output):
-        return parse_basic_output(code, code)
+        return RawModelOutput(commented_code="", explanation="")
 
-    return parse_model_output(full_output, code)
+    return _parse_sections(full_output)

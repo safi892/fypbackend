@@ -1,19 +1,58 @@
+"""Rule-based comment generator (deterministic fallback for Phase 7).
+
+Problem solved: when the AI model returns no meaningful comments, we still want
+readable, context-aware inline comments. This module derives them from C++
+line patterns (declarations, assignments, loops, conditions) without any model.
+
+Why rules instead of a model: comment patterns for student/algorithm code are
+highly regular, so cheap regex heuristics cover the common cases well enough to
+keep the endpoint useful offline.
+"""
+
+from __future__ import annotations
+
 import re
-from typing import Optional
 
 
 def has_meaningful_comments(code: str) -> bool:
+    """Check whether source already contains any ``//`` comments.
+
+    Problem solved: lets the comment service decide if model output is worth
+    keeping or if the rule engine must run. Why only ``//``: inline C++ comments
+    are what we generate/normalise.
+
+    :param code: the candidate commented code.
+    :return: ``True`` if at least one line carries a ``//`` comment.
+    """
     return any("//" in line for line in code.splitlines())
 
 
 def _normalize_code_for_rules(code: str) -> str:
+    """Re-insert line breaks after ``{`` ``}`` ``;`` so one statement per line.
+
+    Problem solved: model/raw code may pack multiple statements on one line,
+    which the line-based rules below cannot parse. Why normalise first: a single
+    statement per line makes pattern matching reliable.
+
+    :param code: the raw C++ source.
+    :return: the source with statement separators turned into newlines.
+    """
     normalized = code.replace("{", "{\n").replace("}", "\n}")
     normalized = re.sub(r";\s*", ";\n", normalized)
     normalized = re.sub(r"\n{2,}", "\n", normalized)
     return normalized.strip()
 
 
-def _match_arithmetic_comment(stripped_line: str) -> Optional[str]:
+def _match_arithmetic_comment(stripped_line: str) -> str | None:
+    """Return a comment describing a basic arithmetic assignment, if matched.
+
+    Problem solved: arithmetic is the most common student statement, so we give
+    it a precise, friendly comment. Why cover ``++``/``+=`` etc.: they are still
+    arithmetic updates and deserve a comment.
+
+    :param stripped_line: the statement with surrounding whitespace removed.
+    :return: a comment string, or ``None`` when the line is not arithmetic.
+    """
     if re.search(r"\w+\s*=\s*.+\s*\+\s*.+;", stripped_line):
         return "Add values and store the result"
     if re.search(r"\w+\s*=\s*.+\s*-\s*.+;", stripped_line):
@@ -39,7 +78,17 @@ def _match_arithmetic_comment(stripped_line: str) -> Optional[str]:
     return None
 
 
-def _match_student_friendly_comment(stripped_line: str) -> Optional[str]:
+def _match_student_friendly_comment(stripped_line: str) -> str | None:
+    """Return a comment for common student/algorithm idioms (size, init, etc.).
+
+    Problem solved: beginner code repeats a small set of idioms (storing a
+    container size, initialising counters/indices). Why name-aware: comments
+    like "initialise i to start from the first position" are far more useful
+    than a generic "declare variable".
+
+    :param stripped_line: the statement with surrounding whitespace removed.
+    :return: a context-aware comment, or ``None`` when no idiom matches.
+    """
     size_capture_match = re.match(
         r"^(?:const\s+)?(?:int|long|short|size_t|auto)\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.(size|length)\(\)\s*;$",
         stripped_line,
@@ -87,7 +136,9 @@ def _match_student_friendly_comment(stripped_line: str) -> Optional[str]:
 
     if re.search(r"\b(empty)\(\)", stripped_line):
         return "Check whether the container has no elements before continuing"
-    if re.search(r"==\s*0", stripped_line) and re.search(r"\b(size|length)\(\)|\bn\b|\blen\b|\bcount\b", stripped_line):
+    if re.search(r"==\s*0", stripped_line) and re.search(
+        r"\b(size|length)\(\)|\bn\b|\blen\b|\bcount\b", stripped_line
+    ):
         return "Handle the empty-input case before doing further work"
     if re.search(r"==\s*nullptr|!=\s*nullptr", stripped_line):
         return "Check whether the pointer is valid before using it"
@@ -114,7 +165,18 @@ def _match_student_friendly_comment(stripped_line: str) -> Optional[str]:
     return None
 
 
-def rule_based_comment_for_line(stripped_line: str) -> Optional[str]:
+def rule_based_comment_for_line(stripped_line: str) -> str | None:
+    """Pick the best comment for a single C++ statement.
+
+    Problem solved: this is the core classifier that maps a line to a comment.
+    Why the ordering (function/branch/loop first, then idioms, then arithmetic,
+    then generic assignment): more specific patterns must win over generic ones
+    so we never mislabel a loop as a plain assignment.
+
+    :param stripped_line: the statement with surrounding whitespace removed.
+    :return: the chosen comment, or ``None`` for lines that should not be
+        commented (braces, includes, comments, etc.).
+    """
     if not stripped_line or stripped_line in {"{", "}", "};"}:
         return None
 
@@ -159,7 +221,11 @@ def rule_based_comment_for_line(stripped_line: str) -> Optional[str]:
         return "Exit the function early"
     if "swap(" in stripped_line:
         return "Swap the two values"
-    if "cout <<" in stripped_line or "printf(" in stripped_line or stripped_line.startswith("print("):
+    if (
+        "cout <<" in stripped_line
+        or "printf(" in stripped_line
+        or stripped_line.startswith("print(")
+    ):
         return "Display output to the user"
     if "cin >>" in stripped_line or "scanf(" in stripped_line or stripped_line.startswith("input("):
         return "Read input into a variable"
@@ -167,7 +233,10 @@ def rule_based_comment_for_line(stripped_line: str) -> Optional[str]:
         return "Append a new element to the container"
     if re.search(r"\b(sort|reverse|accumulate|max|min|find)\s*\(", stripped_line):
         return "Apply a standard library operation"
-    if re.search(r"^\s*[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:<[^;]+?>)?\s*[*&]+\s+temp\s*=\s*head\s*;$", stripped_line):
+    if re.search(
+        r"^\s*[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:<[^;]+?>)?\s*[*&]+\s+temp\s*=\s*head\s*;$",
+        stripped_line,
+    ):
         return "Start temp at the head node for traversal"
     if re.search(r"\b(temp|tmp)\b\s*=", stripped_line):
         return "Store a temporary value for later use"
@@ -187,6 +256,15 @@ def rule_based_comment_for_line(stripped_line: str) -> Optional[str]:
 
 
 def generate_rule_based_comments(code: str) -> str:
+    """Annotate C++ source with deterministic inline comments.
+
+    Problem solved: produce a fully commented version of the code when no model
+    output is available. Why one comment per logical line: keeps the original
+    code intact while adding explanation above it.
+
+    :param code: the original C++ source (uncommented).
+    :return: the source with a ``//`` comment added above each recognised line.
+    """
     commented_lines: list[str] = []
 
     for line in _normalize_code_for_rules(code).splitlines():

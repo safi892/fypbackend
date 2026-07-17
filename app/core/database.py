@@ -4,7 +4,6 @@ import threading
 
 from app.core.config import DB_PATH
 
-
 _DB_LOCK = threading.Lock()
 
 

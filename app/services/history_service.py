@@ -1,11 +1,11 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.core.database import get_db_connection, get_db_lock
 from app.schemas.history import HistoryEntry
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def record_history(
@@ -28,7 +28,7 @@ def record_history(
                 (user_id, input_code, commented_code, explanation, source, created_at),
             )
             connection.commit()
-            return int(cursor.lastrowid)
+            return int(cursor.lastrowid) if cursor.lastrowid is not None else 0
 
 
 def list_history(user_id: int, limit: int, offset: int) -> tuple[list[HistoryEntry], int]:

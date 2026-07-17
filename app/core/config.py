@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 MODEL_PATH = os.getenv("MODEL_PATH", str(BASE_DIR / "codet5_commenst_expla" / "checkpoint_best"))

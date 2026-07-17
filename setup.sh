@@ -90,9 +90,9 @@ for name in config.json tokenizer.json model.safetensors; do
 done
 
 if [ ${#missing_files[@]} -gt 0 ]; then
-  if [ -f "$ROOT/download_model.py" ]; then
+  if [ -f "$ROOT/scripts/download_model.py" ]; then
     echo "Downloading model via download_model.py..."
-    "$VENV_PY" "$ROOT/download_model.py"
+    "$VENV_PY" "$ROOT/scripts/download_model.py"
   fi
 fi
 

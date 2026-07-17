@@ -1,7 +1,30 @@
+"""Rule-based explanation generator (deterministic fallback for Phase 9).
+
+Problem solved: when the AI model returns no meaningful explanation, we still
+want a readable, plain-language summary of what the code does. This module
+derives it from code patterns (loops, conditions, I/O, algorithms) without a
+model.
+
+Why rules instead of a model: the generated explanation is a short, structural
+summary that maps cleanly to a fixed set of detected behaviours, so heuristics
+are sufficient and fully offline.
+"""
+
+from __future__ import annotations
+
 import re
 
 
 def has_meaningful_explanation(explanation: str) -> bool:
+    """Decide whether model text is a real explanation worth keeping.
+
+    Problem solved: the explanation service needs to know when to fall back to
+    rules. Why a small blocklist: model outputs like "none"/"null" are
+    placeholders, not explanations.
+
+    :param explanation: the candidate explanation text.
+    :return: ``True`` if the text looks like a genuine explanation.
+    """
     normalized = explanation.strip()
     if not normalized:
         return False
@@ -11,6 +34,15 @@ def has_meaningful_explanation(explanation: str) -> bool:
 
 
 def _detect_function_name(code: str) -> str | None:
+    """Find the first function definition name in the source.
+
+    Problem solved: a good explanation opens with the function name. Why only
+    the first: the analyzer already enumerates functions; this is just for the
+    narrative opener.
+
+    :param code: the C++ source.
+    :return: the detected function name, or ``None`` if none is found.
+    """
     for line in code.splitlines():
         stripped = line.strip()
         match = re.match(
@@ -23,6 +55,15 @@ def _detect_function_name(code: str) -> str | None:
 
 
 def _collect_behaviors(code: str) -> list[str]:
+    """Detect the high-level behaviours present in the code.
+
+    Problem solved: behaviours are the building blocks of the explanation
+    sentence. Why de-duplicate: repeated keywords (e.g. several ``if``) should
+    yield one "checks conditions" clause, not many.
+
+    :param code: the C++ source.
+    :return: an ordered, de-duplicated list of behaviour phrases.
+    """
     behaviors: list[str] = []
 
     if re.search(r"\bfor\s*\(|\bwhile\s*\(|\bdo\s*\{?", code):
@@ -66,6 +107,15 @@ def _collect_behaviors(code: str) -> list[str]:
 
 
 def generate_rule_based_explanation(code: str) -> str:
+    """Build a plain-language explanation of the code without a model.
+
+    Problem solved: guarantee the client always receives a coherent
+    explanation. Why join behaviours with Oxford comma: reads naturally for
+    one, two or many behaviours.
+
+    :param code: the C++ source to explain.
+    :return: a single explanatory sentence (or two) summarising the code.
+    """
     function_name = _detect_function_name(code)
     behaviors = _collect_behaviors(code)
 
