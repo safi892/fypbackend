@@ -11,7 +11,7 @@ dependencies = [
     "protobuf>=7.34.1",
     "sentencepiece>=0.2.1",
     "torch==2.0.1",
-    "transformers==4.40.2",
+    "transformers==4.46.2",
     "tree-sitter>=0.23,<0.26",
     "tree-sitter-cpp>=0.23,<0.24",
     "uvicorn[standard]>=0.42.0",
@@ -45,6 +45,8 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 # Tests and the entrypoint are allowed looser annotation rules.
 "tests/*" = ["ANN"]
+# Dev scripts embed long C++ sample literals (legitimate >100 char lines).
+"scripts/*" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
@@ -74,4 +76,5 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["."]
 addopts = "-q"

@@ -21,12 +21,19 @@ import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from app.core.config import (
+    FALLBACK_TOKENIZER_PATH,
     MODEL_PATH,
-    PROMPT_MAX_LENGTH,
-    PROMPT_NUM_BEAMS,
-    RAW_MAX_LENGTH,
+    PROMPT_PREFIX,
+    RAW_DO_SAMPLE,
+    RAW_MAX_NEW_TOKENS,
     RAW_NUM_BEAMS,
+    RAW_REPETITION_PENALTY,
+    RAW_TEMPERATURE,
+    RAW_TOP_P,
     TOKENIZER_PATH,
+    TORCH_COMPILE,
+    TORCH_THREADS,
+    USE_MPS,
 )
 from app.model_processing.code_formatting import clean_duplicate_code
 from app.schemas.analyze import StaticAnalysis
@@ -42,6 +49,7 @@ class RawModelOutput:
 
     commented_code: str = ""
     explanation: str = ""
+    raw_text: str = ""
 
 
 def _facts_block(analysis: StaticAnalysis | None) -> str:
@@ -106,7 +114,6 @@ OUTPUT FORMAT:
 ### COMMENTED CODE
 <code with inline comments>
 
-
 ### EXPLANATION
 <final clean summary>
 
@@ -153,21 +160,25 @@ def _parse_sections(output: str) -> RawModelOutput:
     explanation = ""
 
     section_pattern = re.compile(
-        r"###\s*(COMMENTED CODE|LOGIC ANALYSIS|ISSUES|EXPLANATION)\s*\n",
+        r"###\s*(COMMENTED CODE|LOGIC ANALYSIS|ISSUES|VERIFICATION|EXPLANATION)\s*\n",
         re.IGNORECASE,
     )
     matches = list(section_pattern.finditer(normalized))
 
     if matches:
-        sections: dict[str, str] = {}
+        # Everything before the first header is the model's commented code. The
+        # model sometimes emits a "### VERIFICATION"/"### EXPLANATION" trailer
+        # without a "### COMMENTED CODE" header, so we must not discard the
+        # pre-header text (that is the real comment).
+        first_start = matches[0].start()
+        commented_code = normalized[:first_start].strip()
+        explanation = ""
         for index, match in enumerate(matches):
             title = match.group(1).upper()
             start = match.end()
             end = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
-            sections[title] = normalized[start:end].strip()
-
-        commented_code = sections.get("COMMENTED CODE", "")
-        explanation = sections.get("EXPLANATION", "")
+            if title == "EXPLANATION":
+                explanation = normalized[start:end].strip()
     elif "===EXPLANATION===" in normalized:
         commented_code, explanation = normalized.split("===EXPLANATION===", 1)
         commented_code = commented_code.strip()
@@ -179,6 +190,11 @@ def _parse_sections(output: str) -> RawModelOutput:
             explanation = normalized[explanation_match.end() :].strip()
         else:
             commented_code = normalized
+
+    if not explanation:
+        explanation_match = re.search(r"\bEXPLANATION\s*:\s*", normalized, re.IGNORECASE)
+        if explanation_match:
+            explanation = normalized[explanation_match.end() :].strip()
 
     return RawModelOutput(commented_code=commented_code, explanation=explanation)
 
@@ -219,6 +235,84 @@ def _generate_output(
     return str(tokenizer.decode(output_ids[0], skip_special_tokens=True))
 
 
+def _configure_threads() -> int:
+    """Set torch intra-op thread count for CPU inference.
+
+    Problem solved: torch defaults to all cores, which can oversubscribe and slow
+    down a single inference on multi-core CPUs. Why cap at 8: beyond that,
+    contention outweighs parallelism for a 220M model. Why configurable: operators
+    can tune ``TORCH_THREADS`` for their exact CPU.
+
+    :return: the number of threads torch will use.
+    """
+    if TORCH_THREADS > 0:
+        threads = TORCH_THREADS
+    else:
+        threads = min(os.cpu_count() or 4, 8)
+    torch.set_num_threads(threads)
+    return threads
+
+
+def _select_device() -> torch.device:
+    """Pick the fastest available torch backend.
+
+    Problem solved: inference speed depends heavily on the device. Why cuda first:
+    a real NVIDIA GPU is the biggest speed win. Why MPS is opt-in: on torch 2.0.1
+    the MPS beam-decode path is dramatically slower than CPU for this seq2seq
+    model, so we only use it when ``USE_MPS`` is explicitly set. Why a helper: the
+    choice must be made once at load time.
+
+    :return: the torch device to run the model on.
+    """
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if USE_MPS and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def active_device() -> str:
+    """Return the device string the cached model runs on.
+
+    Problem solved: operators need to confirm whether inference uses a GPU/MPS
+    backend (the main speed lever) without loading the model manually. Why a
+    public helper: the inspector scripts call it to print the active backend.
+
+    :return: the device type, e.g. ``"cuda"``, ``"mps"`` or ``"cpu"``.
+    """
+    _, _, device = _load_model()
+    return str(device)
+
+
+def _load_tokenizer_fallback(original_exc: Exception) -> AutoTokenizer:
+    """Load the default checkpoint's tokenizer after the chosen one fails.
+
+    Problem solved: some fine-tune exports (e.g. ``checkpoint_best_updated``) ship a
+    corrupted ``tokenizer.json``. Because every checkpoint is the same CodeT5p base,
+    the default tokenizer is a safe substitute. Why a warning: the operator should know
+    a fallback was used so they can repair the export.
+
+    :param original_exc: the exception from the first tokenizer load attempt.
+    :return: a tokenizer loaded from ``FALLBACK_TOKENIZER_PATH``.
+    :raises RuntimeError: if even the fallback tokenizer cannot load.
+    """
+    import warnings
+
+    warnings.warn(
+        f"Tokenizer at {TOKENIZER_PATH} failed to load ({original_exc}); "
+        f"falling back to default tokenizer at {FALLBACK_TOKENIZER_PATH}.",
+        stacklevel=2,
+    )
+    try:
+        return AutoTokenizer.from_pretrained(FALLBACK_TOKENIZER_PATH, use_fast=True)
+    except Exception as exc:
+        message = (
+            "Fallback tokenizer load also failed. Ensure the default checkpoint "
+            f"{FALLBACK_TOKENIZER_PATH} is intact. Error: {exc}"
+        )
+        raise RuntimeError(message) from exc
+
+
 def _load_model() -> tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
     """Lazily load and cache the tokenizer + model on first use.
 
@@ -244,71 +338,110 @@ def _load_model() -> tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
         if not os.path.isdir(MODEL_PATH):
             raise FileNotFoundError(f"Model directory not found: {MODEL_PATH}")
 
+        threads = _configure_threads()
+
         try:
             tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_PATH, use_fast=True)
         except Exception as exc:
-            message = (
-                "Tokenizer load failed. Ensure tokenizer.json (or vocab.json + merges.txt, "
-                "or spiece.model) matches the model and is not corrupted. "
-                f"Tokenizer source: {TOKENIZER_PATH}. Error: {exc}"
-            )
-            raise RuntimeError(message) from exc
+            if TOKENIZER_PATH == FALLBACK_TOKENIZER_PATH:
+                message = (
+                    "Tokenizer load failed. Ensure tokenizer.json (or vocab.json + merges.txt, "
+                    "or spiece.model) matches the model and is not corrupted. "
+                    f"Tokenizer source: {TOKENIZER_PATH}. Error: {exc}"
+                )
+                raise RuntimeError(message) from exc
+            tokenizer = _load_tokenizer_fallback(exc)
 
         model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_PATH)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = _select_device()
         model.to(device)
         model.eval()
+        if TORCH_COMPILE:
+            model = torch.compile(model)
 
         _MODEL_CACHE = (tokenizer, model, device)
+        print(f"[model] loaded on {device} (threads={threads})")
         return _MODEL_CACHE
 
 
-def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutput:
-    """Run CodeT5 on the code and return the raw commented-code/explanation.
+def generate_text(
+    prompt: str, max_new_tokens: int = RAW_MAX_NEW_TOKENS, num_beams: int = RAW_NUM_BEAMS
+) -> str:
+    """Run one model generation on an arbitrary prompt and return decoded text.
 
-    Problem solved: this is the single AI entry point. Why two strategies: if
-    the model already emitted sections for the raw code we use them; otherwise
-    we send the richer fact-augmented prompt. Why detect a prompt echo: a bad
-    output yields an empty ``RawModelOutput`` so the caller falls back cleanly.
+    Problem solved: task services like the optimizer need to prompt the model
+    with a custom instruction (not the comments/explanation template), but the
+    model load + generation logic must stay in this single engine. Why a public
+    helper: keeps ``run_model`` (comments/explanation) and any future task
+    sharing one cached model and one generation path.
 
-    :param code: the C++ source to analyze.
-    :param analysis: optional static analysis injected into the prompt.
-    :return: a ``RawModelOutput`` (either section may be empty).
+    :param prompt: the full prompt to send to the model.
+    :param max_new_tokens: max generated tokens (output only).
+    :param num_beams: beam-search width.
+    :return: the decoded output string.
     """
     tokenizer, model, device = _load_model()
-
-    full_output = _generate_output(
-        tokenizer,
-        model,
-        device,
-        code,
-        generation_kwargs={
-            "max_length": RAW_MAX_LENGTH,
-            "num_beams": RAW_NUM_BEAMS,
-        },
-    )
-
-    if "###" in full_output:
-        return _parse_sections(full_output)
-
-    if "===EXPLANATION===" in full_output or full_output.strip() != code.strip():
-        return _parse_sections(full_output)
-
-    prompt = build_prompt(code, analysis)
-    full_output = _generate_output(
+    return _generate_output(
         tokenizer,
         model,
         device,
         prompt,
         generation_kwargs={
-            "max_length": PROMPT_MAX_LENGTH,
-            "num_beams": PROMPT_NUM_BEAMS,
-            "no_repeat_ngram_size": 3,
+            "max_new_tokens": max_new_tokens,
+            "num_beams": num_beams,
             "early_stopping": True,
+            "no_repeat_ngram_size": 3,
+            "repetition_penalty": 1.2,
         },
     )
 
-    if _looks_like_prompt_echo(full_output):
-        return RawModelOutput(commented_code="", explanation="")
 
-    return _parse_sections(full_output)
+def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutput:
+    """Run CodeT5 on the code and return the raw commented-code/explanation.
+
+    Problem solved: this is the single AI entry point. Why prepend the training
+    prompt prefix ``"comment and explain: "``: without it the model emits only a
+    commented function plus a VERIFICATION trailer and never reaches the
+    ``### EXPLANATION`` section, so the explanation service falls back to rules.
+    The prefix is exactly what the checkpoint was fine-tuned with, so it elicits
+    the full three-section output. Why beam search + a gentle repetition penalty:
+    greedy decoding hallucinated identifiers (``elem[mid]``, ``a[left]``) and
+    dropped the explanation; matching the training run (num_beams=4,
+    repetition_penalty~1.05) produces faithful code and a real explanation. Why
+    ``do_sample`` is off by default: keeps the API deterministic while matching
+    the training quality.
+
+    :param code: the C++ source to analyze.
+    :param analysis: accepted for API compatibility; not used in the prompt
+        (the fixed training prefix already shapes the output).
+    :return: a ``RawModelOutput`` (either section may be empty).
+    """
+    tokenizer, model, device = _load_model()
+
+    prompt = f"{PROMPT_PREFIX}{code}"
+
+    generation_kwargs: dict[str, object] = {
+        "max_new_tokens": RAW_MAX_NEW_TOKENS,
+        "num_beams": RAW_NUM_BEAMS,
+        "early_stopping": True,
+        "repetition_penalty": RAW_REPETITION_PENALTY,
+        "do_sample": RAW_DO_SAMPLE,
+    }
+    if RAW_DO_SAMPLE:
+        generation_kwargs["temperature"] = RAW_TEMPERATURE
+        generation_kwargs["top_p"] = RAW_TOP_P
+
+    full_output = _generate_output(
+        tokenizer,
+        model,
+        device,
+        prompt,
+        generation_kwargs=generation_kwargs,
+    )
+
+    parsed = _parse_sections(full_output)
+    return RawModelOutput(
+        commented_code=parsed.commented_code,
+        explanation=parsed.explanation,
+        raw_text=full_output,
+    )

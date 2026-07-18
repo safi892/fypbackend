@@ -19,9 +19,10 @@ from app.model_processing.explanation_rules import (
 def generate(code: str, raw_explanation: str = "") -> str:
     """Return a natural-language explanation of the given C++ code.
 
-    Problem solved: pick the strongest available explanation. Why fall back to
-    rules when the model output is weak: an empty/"null" explanation is worse
-    than a deterministic one, so the client always gets readable text.
+    Problem solved: pick the strongest available explanation. Why prefer the raw
+    model output and only fall back to rules when it is empty/placeholder: the
+    model produces the most specific, name-aware text, and the deterministic
+    fallback is a last resort so the client always gets readable text.
 
     :param code: the C++ source to explain.
     :param raw_explanation: model-produced explanation (may be empty).
@@ -33,3 +34,30 @@ def generate(code: str, raw_explanation: str = "") -> str:
         explanation = generate_rule_based_explanation(code.strip())
 
     return explanation
+
+
+_GENERIC_EXPLANATION_MARKERS = (
+    "performs the following steps",
+    "returns a result",
+    "processes the given input",
+    "processes the given code",
+)
+
+
+def is_generic_explanation(explanation: str, min_words: int = 15) -> bool:
+    """Flag an explanation as generic/low-value for the quality gate.
+
+    Problem solved: the quality gate must detect templated or trivial text so
+    the inspector (and any caller) can favour the raw model output instead. Why
+    the same word floor as before: a real explanation is substantive.
+
+    :param explanation: the explanation text to check.
+    :param min_words: minimum word count to be considered substantive.
+    :return: ``True`` if the text is too short or uses a banned template phrase.
+    """
+    normalized = explanation.strip()
+    if not normalized:
+        return True
+    if any(marker in normalized.lower() for marker in _GENERIC_EXPLANATION_MARKERS):
+        return True
+    return len(normalized.split()) < min_words

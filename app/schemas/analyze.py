@@ -95,3 +95,8 @@ class AnalyzeResponse(BaseModel):
     documentation: list[DocEntry] = Field(default_factory=list)
     change_analysis: ChangeAnalysis | None = None
     translation: str | None = None
+    needs_review: bool = Field(
+        False,
+        description="True when the generated commented code failed the C++ "
+        "syntax gate and should be checked by a human before being trusted.",
+    )

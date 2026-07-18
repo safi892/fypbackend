@@ -1,9 +1,5 @@
 from huggingface_hub import snapshot_download
 
-
-
-
-
 snapshot_download(
     repo_id="saffi892/fybmodel",
     repo_type="dataset",

@@ -27,6 +27,8 @@ htmlcov/
 .pytype/
 .pyre/
 
+
+
 # Caches
 .cache/
 
@@ -39,6 +41,9 @@ htmlcov/
 
 # Virtual environments
 .venv
+
+
+trained_model
 
 # Local model artifacts
 models/

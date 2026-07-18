@@ -10,6 +10,7 @@ task and makes the pipeline order explicit and easy to follow/test.
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
+from app.model_processing.syntax_check import check_cpp_syntax
 from app.schemas.analyze import AnalyzeRequest, AnalyzeResponse
 from app.schemas.history import HistoryListResponse
 from app.services import (
@@ -62,6 +63,11 @@ def analyze(
     suggestions = review_service.generate_suggestions(analysis)
     documentation = documentation_service.generate(analysis)
 
+    # Safety gate: flag commented code the compiler rejects so clearly broken
+    # model output is surfaced for human review rather than trusted blindly.
+    syntax_ok, _ = check_cpp_syntax(commented_code)
+    needs_review = not syntax_ok
+
     # Phase 4 — only when the client sent a previous version.
     change_analysis = None
     if payload.old_code:
@@ -81,6 +87,7 @@ def analyze(
         documentation=documentation,
         change_analysis=change_analysis,
         translation=translation,
+        needs_review=needs_review,
     )
 
     record_history(

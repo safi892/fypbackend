@@ -27,22 +27,6 @@ def has_meaningful_comments(code: str) -> bool:
     return any("//" in line for line in code.splitlines())
 
 
-def _normalize_code_for_rules(code: str) -> str:
-    """Re-insert line breaks after ``{`` ``}`` ``;`` so one statement per line.
-
-    Problem solved: model/raw code may pack multiple statements on one line,
-    which the line-based rules below cannot parse. Why normalise first: a single
-    statement per line makes pattern matching reliable.
-
-    :param code: the raw C++ source.
-    :return: the source with statement separators turned into newlines.
-    """
-    normalized = code.replace("{", "{\n").replace("}", "\n}")
-    normalized = re.sub(r";\s*", ";\n", normalized)
-    normalized = re.sub(r"\n{2,}", "\n", normalized)
-    return normalized.strip()
-
-
 def _match_arithmetic_comment(stripped_line: str) -> str | None:
     """Return a comment describing a basic arithmetic assignment, if matched.
 
@@ -259,21 +243,43 @@ def generate_rule_based_comments(code: str) -> str:
     """Annotate C++ source with deterministic inline comments.
 
     Problem solved: produce a fully commented version of the code when no model
-    output is available. Why one comment per logical line: keeps the original
-    code intact while adding explanation above it.
+    output is available. Why comment above the *original* line, preserving its
+    indentation and exact text: the client expects the source formatting
+    (including one-line ``for`` headers) to stay intact — we must never re-flow
+    or split statements at ``;``/``{``/``}``.
 
     :param code: the original C++ source (uncommented).
     :return: the source with a ``//`` comment added above each recognised line.
     """
     commented_lines: list[str] = []
 
-    for line in _normalize_code_for_rules(code).splitlines():
+    for line in code.splitlines():
         stripped_line = line.strip()
         indent = line[: len(line) - len(line.lstrip())]
         comment = rule_based_comment_for_line(stripped_line)
 
         if comment:
             commented_lines.append(f"{indent}// {comment}")
-        commented_lines.append(line.rstrip())
+        commented_lines.append(line)
 
     return "\n".join(commented_lines)
+
+
+_GENERIC_COMMENT_MARKERS = (
+    "Check whether the condition is true",
+    "Iterate through values using a loop",
+)
+
+
+def is_generic_comment(commented_code: str) -> bool:
+    """Flag commented code as generic for the quality gate.
+
+    Problem solved: the rule fallback emits a few stock phrases that are
+    accurate but uninformative. The gate lets the caller prefer raw model output
+    (or surface the original code) instead of these templates.
+
+    :param commented_code: the candidate commented code.
+    :return: ``True`` if a banned generic phrase appears in the comments.
+    """
+    lowered = commented_code.lower()
+    return any(marker.lower() in lowered for marker in _GENERIC_COMMENT_MARKERS)
