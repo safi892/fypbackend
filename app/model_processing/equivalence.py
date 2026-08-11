@@ -27,7 +27,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 #: Argument types the generated driver knows how to supply values for.
-SCALAR_TYPES = {"int", "long", "long long", "size_t", "unsigned", "double", "float", "bool"}
+SCALAR_TYPES = {
+    "int", "long", "long long", "size_t", "unsigned", "double", "float", "bool",
+    "char", "unsigned char", "short", "unsigned long",
+}
+
+#: Spellings of the same scalar. Refusing a function over its author's choice
+#: of prefix declines a large slice of ordinary C++ for no reason.
+TYPE_ALIASES = {
+    "std::size_t": "size_t", "unsigned int": "unsigned", "signed int": "int",
+    "ll": "long long", "ull": "long long", "int64_t": "long long",
+    "std::string": "string", "uint": "unsigned", "lli": "long long",
+}
+
+#: Driven as words rather than numbers.
+STRING_TYPES = {"string"}
+
+#: One argument for one call: a scalar, the contents of a sequence, or text.
+Value = int | tuple[int, ...] | str
 
 SIGNATURE_RE = re.compile(
     r"^\s*(?P<ret>[A-Za-z_][\w:<>,\s*&]*?)\s+(?P<name>[A-Za-z_]\w*)\s*\((?P<params>[^)]*)\)\s*\{?",
@@ -44,22 +61,87 @@ NOISE_FLOOR_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
+class Parameter:
+    """One declared argument, and what the driver can do with it."""
+
+    type: str
+    name: str
+    is_array: bool = False
+    is_reference: bool = False
+    is_const: bool = False
+
+    @property
+    def is_vector(self) -> bool:
+        return "vector" in self.type
+
+    @property
+    def element_type(self) -> str:
+        """The scalar type a value of this parameter is made of.
+
+        The inner match is greedy on purpose: stopping at the first ``>`` reads
+        ``std::vector<std::vector<int>>`` as being made of ``vector<int``, a
+        type that does not exist, so a nested sequence gets refused under a
+        mangled name instead of its real one.
+        """
+        inner = re.search(r"<\s*(.+)\s*>", self.type)
+        base = inner.group(1) if inner else self.type
+        cleaned = base.replace("const", "").replace("&", "").replace("*", "").strip()
+        return TYPE_ALIASES.get(cleaned, cleaned)
+
+    @property
+    def is_string(self) -> bool:
+        return self.element_type in STRING_TYPES
+
+    @property
+    def is_buffer(self) -> bool:
+        """A numeric sequence. A string is a sequence too, but prints itself."""
+        return (self.is_array or self.is_vector) and not self.is_string
+
+    @property
+    def is_output(self) -> bool:
+        """Whether the callee can write through this parameter.
+
+        This is what makes a ``void`` function checkable: the answer is not
+        returned, so it has to be read back out of the arguments.
+        """
+        if self.is_const:
+            return False
+        return self.is_array or self.is_reference
+
+    @property
+    def drivable(self) -> bool:
+        return self.element_type in SCALAR_TYPES or self.is_string
+
+
+@dataclass(frozen=True)
 class Signature:
     """A parsed function signature."""
 
     return_type: str
     name: str
-    params: tuple[tuple[str, str], ...]
+    params: tuple[Parameter, ...]
+
+    @property
+    def returns_value(self) -> bool:
+        return self.return_type.strip() != "void"
+
+    @property
+    def observable(self) -> bool:
+        """Whether calling this produces anything that can be compared.
+
+        A ``void`` function taking everything by value prints nothing, and
+        nothing compares equal to nothing — so accepting the shape would report
+        every such rewrite as verified. A check that always passes is worse
+        than no check, because the user is told the rewrite was proven.
+        """
+        return self.returns_value or any(p.is_output for p in self.params)
 
     @property
     def drivable(self) -> bool:
         """Whether a caller can be generated for this shape."""
-        if self.return_type.strip() == "void" or not self.params:
+        if not self.params:
             return False
-        return all(
-            ptype.replace("const", "").replace("&", "").strip() in SCALAR_TYPES
-            for ptype, _ in self.params
-        )
+        return all(p.drivable for p in self.params) and self.observable
 
 
 @dataclass
@@ -91,25 +173,111 @@ def parse_signature(code: str) -> Signature | None:
         if name in {"main", "if", "for", "while", "switch", "return", "sizeof"}:
             continue
         raw = match.group("params").strip()
-        params: list[tuple[str, str]] = []
+        params: list[Parameter] = []
         if raw and raw != "void":
-            for piece in raw.split(","):
-                cleaned = re.sub(r"\[\s*\]", "", piece).strip()
+            for piece in _split_params(raw):
+                piece = piece.strip()
+                is_array = "[" in piece
+                is_reference = "&" in piece or "*" in piece
+                is_const = bool(re.match(r"\bconst\b", piece))
+                cleaned = re.sub(r"\[[^\]]*\]", "", piece).strip()
                 bits = cleaned.replace("&", " ").replace("*", " ").split()
                 if len(bits) < 2:
                     return None
-                params.append((" ".join(bits[:-1]), bits[-1]))
+                params.append(
+                    Parameter(
+                        type=" ".join(bits[:-1]),
+                        name=bits[-1],
+                        is_array=is_array,
+                        is_reference=is_reference,
+                        is_const=is_const,
+                    )
+                )
         return Signature(match.group("ret").strip(), name, tuple(params))
     return None
 
 
-def _driver(signature: Signature, cases: list[tuple[int, ...]]) -> str:
-    calls = "\n".join(
-        f'  {{ auto r = {signature.name}({", ".join(str(v) for v in case)}); '
-        f'std::cout << "{", ".join(str(v) for v in case)}" << " => " << r << "\\n"; }}'
-        for case in cases
-    )
-    return f"\n\nint main() {{\n{calls}\n  return 0;\n}}\n"
+def _split_params(raw: str) -> list[str]:
+    """Split on the commas that separate parameters, not the ones inside types.
+
+    ``std::map<int, int> counts`` holds a comma belonging to the template
+    argument list, and splitting on it yields two nonsense parameters that then
+    parse as plausible ones.
+    """
+    pieces: list[str] = []
+    depth = 0
+    current = ""
+    for character in raw:
+        if character in "<([":
+            depth += 1
+        elif character in ">)]":
+            depth -= 1
+        if character == "," and depth == 0:
+            pieces.append(current)
+            current = ""
+            continue
+        current += character
+    if current.strip():
+        pieces.append(current)
+    return pieces
+
+
+def _render_case(signature: Signature, values: tuple[Value, ...], index: int) -> str:
+    """Set up the arguments for one call, make it, and print what came back.
+
+    Sequences are backed by a ``std::vector`` whatever the parameter says:
+    ``vector`` carries its own length, can be empty without becoming an illegal
+    zero-sized array, and hands a plain pointer to an ``int[]`` parameter via
+    ``.data()``. One representation covers both shapes.
+
+    Everything the call could have changed is printed, not only the return
+    value — a ``void`` function's whole answer is in its arguments.
+    """
+    setup: list[str] = []
+    arguments: list[str] = []
+    label: list[str] = []
+
+    for position, (parameter, value) in enumerate(zip(signature.params, values, strict=True)):
+        local = f"a{index}_{position}"
+        if isinstance(value, str):
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            setup.append(f'    std::string {local} = "{escaped}";')
+            arguments.append(local)
+            # Single quotes: this label is pasted inside a C++ double-quoted
+            # literal, and a double quote here would end it early.
+            label.append(f"'{value}'")
+        elif isinstance(value, tuple):
+            literal = ", ".join(str(item) for item in value)
+            setup.append(f"    std::vector<{parameter.element_type}> {local} = {{{literal}}};")
+            arguments.append(local if parameter.is_vector else f"{local}.data()")
+            label.append("[" + ",".join(str(item) for item in value) + "]")
+        else:
+            setup.append(f"    {parameter.element_type} {local} = {value};")
+            arguments.append(local)
+            label.append(str(value))
+
+    call = f"{signature.name}({', '.join(arguments)})"
+    lines = [*setup, f"    auto r = {call};" if signature.returns_value else f"    {call};"]
+    lines.append(f'    std::cout << "{" | ".join(label)}" << " => ";')
+    if signature.returns_value:
+        lines.append('    std::cout << r << " ; ";')
+    # After the call, deliberately: before it, these are the inputs.
+    for position, parameter in enumerate(signature.params):
+        if not parameter.is_output:
+            continue
+        local = f"a{index}_{position}"
+        if isinstance(values[position], tuple):
+            lines.append(f'    for (auto v : {local}) std::cout << v << ",";')
+            lines.append('    std::cout << " ; ";')
+        else:
+            lines.append(f'    std::cout << {local} << " ; ";')
+    lines.append('    std::cout << "\\n";')
+    return "  {\n" + "\n".join(lines) + "\n  }"
+
+
+def _driver(signature: Signature, cases: list[tuple[Value, ...]]) -> str:
+    body = "\n".join(_render_case(signature, values, index) for index, values in enumerate(cases))
+    return f"\n\nint main() {{\n{body}\n  return 0;\n}}\n"
 
 
 def _build_and_run(
@@ -143,13 +311,64 @@ def _build_and_run(
     return result.stdout, "", best
 
 
-def _cases(signature: Signature) -> tuple[list[tuple[int, ...]], tuple[int, ...]]:
+#: Sequence inputs in the order a reviewer would try them. The empty case earns
+#: its place: it is where ``size() - 1`` on an unsigned type wraps.
+BUFFER_CASES: tuple[tuple[int, ...], ...] = (
+    (), (7,), (1, 2, 3, 4), (4, 3, 2, 1), (5, 1, 5, 1, 5), (-3, 8, 0, -1, 2),
+)
+
+#: Text inputs chosen the same way: empty, single, palindrome, mixed case with
+#: a space, repeats.
+STRING_CASES: tuple[str, ...] = ("", "a", "abc", "racecar", "Hello World", "aabbcc")
+
+
+def _fill(
+    signature: Signature, buffer: tuple[int, ...], scalar: int, text: str
+) -> tuple[Value, ...]:
+    """Build one argument tuple, sizing any length parameter from its sequence.
+
+    An integer directly after a sequence is that sequence's length —
+    ``f(int arr[], int n)`` is close to universal. A length invented
+    independently would index past the end, where the comparison stops
+    measuring the code and starts measuring undefined behaviour.
+
+    Misreading the convention is safe in the direction that matters: if that
+    integer was really something else, both versions still receive the same
+    small value, so the verdict stays sound and only the input gets less
+    interesting. Guessing too *large* is the dangerous error, and deriving the
+    value from the sequence cannot do that.
+    """
+    values: list[Value] = []
+    previous_length: int | None = None
+    for parameter in signature.params:
+        if parameter.is_string:
+            values.append(text)
+            previous_length = len(text)
+        elif parameter.is_buffer:
+            values.append(buffer)
+            previous_length = len(buffer)
+        elif previous_length is not None and parameter.element_type != "double":
+            values.append(previous_length)
+            previous_length = None
+        else:
+            values.append(scalar)
+    return tuple(values)
+
+
+def _cases(signature: Signature) -> tuple[list[tuple[Value, ...]], tuple[Value, ...]]:
     """Small inputs for correctness, and one large input for timing.
 
     They have to be different. Small inputs finish faster than a process takes
     to start, so timing them measures the operating system; large inputs make
-    an exponential implementation visible.
+    an expensive implementation visible. For sequences the same argument
+    applies to *length*: a quadratic sort and a linearithmic one are
+    indistinguishable on four elements.
     """
+    if any(p.is_buffer or p.is_string for p in signature.params):
+        small = [_fill(signature, b, 2, t) for b, t in zip(BUFFER_CASES, STRING_CASES, strict=True)]
+        large = tuple((index * 7919) % 2003 for index in range(1500))
+        return small, _fill(signature, large, 2, "abcdefghij" * 150)
+
     width = len(signature.params)
     if width == 1:
         return [(n,) for n in (0, 1, 2, 3, 5, 10, 15, 20)], (38,)
@@ -177,9 +396,16 @@ def check(original: str, optimized: str, *, timeout: float = 20.0) -> Equivalenc
     if signature is None:
         return EquivalenceResult(reason="could not read a function signature")
     if not signature.drivable:
-        return EquivalenceResult(
-            reason=f"cannot generate a caller for {signature.name}(...) automatically"
-        )
+        if signature.params and not signature.observable:
+            why = (
+                "it returns nothing and takes every argument by value, so a call "
+                "leaves nothing to compare"
+            )
+        elif not signature.params:
+            why = "it takes no arguments, so there is nothing to vary"
+        else:
+            why = "its arguments are not shapes the driver can supply values for"
+        return EquivalenceResult(reason=f"cannot check {signature.name}(...): {why}")
 
     cases, timing_case = _cases(signature)
     driver = _driver(signature, cases)

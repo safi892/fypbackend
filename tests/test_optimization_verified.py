@@ -42,9 +42,41 @@ def test_reads_a_scalar_signature():
 
 
 def test_refuses_shapes_it_cannot_call():
+    """`void run(int n)` is the dangerous one: it prints nothing, and nothing
+    compares equal to nothing, so accepting it would verify every rewrite."""
     assert not parse_signature("void run(int n) { }").drivable
     assert not parse_signature("int seed() { return 4; }").drivable
-    assert not parse_signature("int total(std::vector<int> xs) { return 0; }").drivable
+    assert not parse_signature("int walk(TreeNode* root) { return 0; }").drivable
+
+
+def test_drives_the_shapes_real_submissions_are_written_in():
+    assert parse_signature("int total(std::vector<int> xs) { return 0; }").drivable
+    assert parse_signature("void sortValues(int data[], int n) { }").drivable
+    assert parse_signature("std::string flip(std::string s) { return s; }").drivable
+    assert parse_signature("void twice(int& x) { }").drivable
+
+
+def test_a_rewrite_that_corrupts_an_array_is_rejected():
+    """The measured case: a bubble sort whose swap has no temporary.
+
+    The function returns nothing, so this is caught only by reading the array
+    back after the call.
+    """
+    correct = (
+        "void sortValues(int d[], int n) {\n"
+        "  for (int i = 0; i < n - 1; i++)\n"
+        "    for (int j = 0; j < n - i - 1; j++)\n"
+        "      if (d[j] > d[j+1]) { int t = d[j]; d[j] = d[j+1]; d[j+1] = t; }\n"
+        "}"
+    )
+    broken = correct.replace(
+        "int t = d[j]; d[j] = d[j+1]; d[j+1] = t;", "d[j] = d[j+1]; d[j+1] = d[j];"
+    )
+
+    verdict = check(correct, broken)
+
+    assert verdict.verified, verdict.reason
+    assert not verdict.equivalent, "a rewrite that loses data must not be shown"
 
 
 # --- the verdict --------------------------------------------------------------- #
@@ -84,7 +116,8 @@ def test_an_uncallable_signature_says_so_rather_than_claiming_success():
     result = check("void go(int n) { }", "void go(int n) { return; }")
 
     assert not result.verified and not result.equivalent
-    assert "cannot generate a caller" in result.summary()
+    assert "cannot check" in result.summary()
+    assert "nothing to compare" in result.summary(), "say why it was refused, not just that it was"
 
 
 # --- what the service does with the verdict -------------------------------------- #
