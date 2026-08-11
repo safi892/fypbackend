@@ -60,10 +60,12 @@ static_analyze (tree-sitter, cheap, ground truth)
   → record_history
 ```
 
-The static facts feed the response and the rule-based services. They reach no
-model prompt on either backend — both checkpoints are fine-tuned on fixed
-wording and drift on anything prepended to it, and the dead `_facts_block` that
-tried it has been deleted.
+The static facts feed the response and the rule-based services. On this path
+they reach no model prompt on either backend — both checkpoints are fine-tuned
+on fixed wording and drift on anything prepended to it, `run_model`'s `analysis`
+argument is accepted and ignored, and the dead `_facts_block` that tried it has
+been deleted. `/optimize` is the exception: `build_optimization_prompt` puts one
+recursion hint in the prompt, on the CodeT5 path only.
 
 `app/services/` owns tasks (each can later swap its rule engine for a model); `app/model_processing/` owns the deterministic text/code machinery (anchoring, equivalence, repair, syntax check); `app/parsers/` owns tree-sitter.
 

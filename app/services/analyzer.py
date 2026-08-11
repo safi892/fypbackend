@@ -5,10 +5,12 @@ Problem solved
 Before any AI runs, we need structured, *ground-truth* facts about the code
 (functions, recursion, loop nesting, missing docs, complexity). These facts
 feed the response itself, the suggestion generator, the documentation service
-and the comment validator. They reach no LLM prompt on either backend: both
-checkpoints are fine-tuned on fixed wording and drift on anything prepended to
-it. Doing this deterministically (not via the model) keeps it cheap,
-debuggable and stable.
+and the comment validator. On the ``/analyze`` path they reach no model prompt
+at all: both checkpoints are fine-tuned on fixed wording and drift on anything
+prepended to it, and the ``run_model`` ``analysis`` argument is accepted and
+ignored. The one exception is ``optimization_service.build_optimization_prompt``
+on the legacy CodeT5 optimizer, which adds a single recursion hint. Doing this
+deterministically (not via the model) keeps it cheap, debuggable and stable.
 
 Why this design
 ---------------
