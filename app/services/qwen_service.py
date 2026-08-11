@@ -34,6 +34,7 @@ from app.core.config import (
     LLAMA_TIMEOUT,
 )
 from app.model_processing.anchors import Anchor, AnchorReport, render_commented_code, repair_anchors
+from app.model_processing.comment_validation import validate as validate_comments
 from app.parsers.cpp_chunking import Chunk, chunk_code
 
 LOGGER = logging.getLogger(__name__)
@@ -159,6 +160,10 @@ def annotate(code: str) -> tuple[list[Anchor], AnchorReport, int]:
     functions, and searching the whole file for it would let a comment written
     about one attach to another.
 
+    Semantic validation runs last, on whole-file coordinates: its rules ask
+    what the *enclosing function* contains, and a chunk is a line range that
+    may hold only part of one.
+
     :param code: the submitted source.
     :return: ``(anchors, report, chunk_count)`` in whole-file coordinates.
     """
@@ -173,6 +178,8 @@ def annotate(code: str) -> tuple[list[Anchor], AnchorReport, int]:
         combined.exact += report.exact
         combined.relocated += report.relocated
         combined.dropped += report.dropped
+        combined.dropped_punctuation += report.dropped_punctuation
+        combined.dropped_numeric += report.dropped_numeric
         for anchor in report.anchors:
             line = anchor.line + chunk.start_line - 1
             if line in claimed:
@@ -189,8 +196,21 @@ def annotate(code: str) -> tuple[list[Anchor], AnchorReport, int]:
         for anchor in anchors
         if 1 <= anchor.line <= len(lines) and lines[anchor.line - 1] == anchor.code.strip()
     ]
-    combined.anchors = anchors
-    return anchors, combined, len(chunks)
+
+    # Everything above proves a comment is attached to a line the user wrote.
+    # This asks the weaker but different question of whether it can be true of
+    # that line, and drops it silently when the tree says no — the same
+    # treatment a hallucinated anchor already gets, for the same reason: a
+    # comment the service cannot stand behind is worse than one fewer comment.
+    validation = validate_comments(code, anchors)
+    for rejection in validation.rejections:
+        LOGGER.info(
+            "qwen backend: rejected comment on line %d (%s: %s)",
+            rejection.anchor.line, rejection.rule, rejection.detail,
+        )
+    combined.rejected_semantic = validation.rejected
+    combined.anchors = validation.anchors
+    return validation.anchors, combined, len(chunks)
 
 
 def explain(code: str) -> str:
@@ -215,8 +235,10 @@ def run(code: str) -> QwenOutput:
     anchors, report, chunks = annotate(code)
     explanation = explain(code)
     LOGGER.info(
-        "qwen backend: %d chunks, %d/%d anchors kept (%d exact, %d relocated, %d dropped)",
+        "qwen backend: %d chunks, %d/%d anchors kept "
+        "(%d exact, %d relocated, %d dropped, %d refuted by the tree)",
         chunks, report.kept, report.total, report.exact, report.relocated, report.dropped,
+        report.rejected_semantic,
     )
     return QwenOutput(
         commented_code=render_commented_code(code, anchors),

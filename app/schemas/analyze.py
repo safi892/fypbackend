@@ -92,8 +92,14 @@ class AnchorStats(BaseModel):
     """How many generated comments survived being checked against the code.
 
     Exposed because it is the honest quality signal for this response:
-    ``dropped`` counts comments about lines the user never wrote, which were
-    discarded rather than shown.
+    ``dropped`` counts comments about lines the user never wrote and
+    ``rejected_semantic`` comments the syntax tree refutes, both discarded
+    rather than shown.
+
+    ``kept`` is counted, not derived, so it need not equal
+    ``proposed - dropped``: anchors are also discarded after repair, and where
+    the file was split into chunks the same line may be commented twice and
+    kept once.
     """
 
     proposed: int = 0
@@ -106,6 +112,9 @@ class AnchorStats(BaseModel):
     )
     dropped_numeric: int = Field(
         0, description="Anchors discarded for citing numbers their line does not contain"
+    )
+    rejected_semantic: int = Field(
+        0, description="Anchors discarded for saying something the syntax tree refutes"
     )
     chunks: int = Field(0, description="Pieces the file was split into")
 

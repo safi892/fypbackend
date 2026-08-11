@@ -20,7 +20,8 @@ uv sync --extra notebooks                  # add the Jupyter kernel; uv prunes i
 ./runserver.sh                             # the API; start|stop|restart|status|logs
 curl -s localhost:8080/ready | python3 -m json.tool   # names what is missing
 
-.venv/bin/python -m pytest -q              # 63 tests, ~2 min with the model server up
+.venv/bin/python -m pytest -q              # 90 tests, ~2 min with the model server up
+.venv/bin/python scripts/eval_comment_validator.py    # what the comment rules catch
 .venv/bin/python -m pytest tests/test_qwen_backend.py::test_a_miscounted_anchor_is_moved_to_the_line_it_quotes
 .venv/bin/python -m pytest -p no:warnings  # the deprecation noise buries the summary line
 .venv/bin/python -m ruff check app         # clean
@@ -52,11 +53,17 @@ When llama-server is down the Qwen path falls back to CodeT5 rather than errorin
 ```
 static_analyze (tree-sitter, cheap, ground truth)
   → model_service.run_model  → qwen_service | codet5
+       qwen only: repair_anchors → whole-file gate → comment_validation
   → comment_service / explanation_service / review_service / documentation_service
-  → syntax gate → needs_review
+  → syntax gate (skipped when the backend anchored) → needs_review
   → diff_service (only with old_code) → translation_service (only for roman_urdu)
   → record_history
 ```
+
+The static facts feed the response and the rule-based services. They reach no
+model prompt on either backend — both checkpoints are fine-tuned on fixed
+wording and drift on anything prepended to it, and the dead `_facts_block` that
+tried it has been deleted.
 
 `app/services/` owns tasks (each can later swap its rule engine for a model); `app/model_processing/` owns the deterministic text/code machinery (anchoring, equivalence, repair, syntax check); `app/parsers/` owns tree-sitter.
 
@@ -66,7 +73,11 @@ The model returns comments as `{line, code, comment}` records, **not** a rewritt
 
 Line **numbers** are unreliable (~25–43% correct); the **quotes** are not (~100%). So [anchors.py](app/model_processing/anchors.py) relocates each comment by its quoted text, drops anything quoting a line the user never wrote, and `render_commented_code` appends comments to the user's own lines. `commented_code` is therefore always the submitted source verbatim plus `// comment` — never a model reconstruction. Measured on a 138-line file: 42 proposed, 39 kept, 3 dropped, 29 line numbers silently corrected.
 
-This proves a comment is *attached correctly*. It does not prove the comment is *true* — roughly 9% are still factually wrong. Don't describe the output as verified-correct.
+This proves a comment is *attached correctly*. It does not prove the comment is *true* — on 46 hand-labelled comments, 5 were wrong while perfectly anchored. Don't describe the output as verified-correct.
+
+Three rules close part of that gap by discarding comments the code refutes — `_is_punctuation_only` and `_contradicts_its_line` in `anchors.py`, then [comment_validation.py](app/model_processing/comment_validation.py) on the AST (claims of iteration or recursion the tree denies; names cited as code the enclosing function never mentions). Measured by `scripts/eval_comment_validator.py`: **3 of the 5 rejected, 0 correct comments lost** — precision 1.00, recall 0.60. `anchor_stats.rejected_semantic` and `dropped_*` report every rejection; the fixture is 46 comments over two programs, enough to tune precision and not enough for a tight interval on the error rate.
+
+Two things about those rules resist tidying. Each is scoped to the enclosing **function**, not the anchored line: "iterates over the array" on a signature line is true of the function and false of the line, and the line-scoped version throws it away. And rule 3 only checks tokens the comment *writes as code* (underscore, camelCase, `name(`/`name[`), never comment words that merely match an identifier — real programs are full of variables called `path` and `next`, and matching on those rejects correct English. Precision is the constraint: a lost correct comment is visible, a missed wrong one only leaves the status quo.
 
 When `verified=True` reaches `comment_service`, repair and rule-based fallbacks are bypassed on purpose; they could only move the text away from what the user sent.
 

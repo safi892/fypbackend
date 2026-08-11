@@ -4,8 +4,11 @@ Problem solved
 --------------
 Before any AI runs, we need structured, *ground-truth* facts about the code
 (functions, recursion, loop nesting, missing docs, complexity). These facts
-feed the prompt builder, the suggestion generator and the frontend. Doing this
-deterministically (not via the model) keeps it cheap, debuggable and stable.
+feed the response itself, the suggestion generator, the documentation service
+and the comment validator. They reach no LLM prompt on either backend: both
+checkpoints are fine-tuned on fixed wording and drift on anything prepended to
+it. Doing this deterministically (not via the model) keeps it cheap,
+debuggable and stable.
 
 Why this design
 ---------------

@@ -1,0 +1,339 @@
+{
+  "note": "Every comment the Qwen backend produced for two programs, recorded in test_results.md before any semantic rule existed, hand-labelled correct or wrong. 46 comments over two programs is enough to tune precision and to show the method works. It is not enough for a tight confidence interval on the error rate — grow it to a few hundred comments over more programs before quoting one as a headline number.",
+  "programs": [
+    {
+      "name": "bubbleSort",
+      "code": "void bubbleSort(int arr[], int n) {\n    for (int i = 0; i < n-1; i++) {\n        for (int j = 0; j < n-i-1; j++) {\n            if (arr[j] > arr[j+1]) {\n                int temp = arr[j];\n                arr[j] = arr[j+1];\n                arr[j+1] = temp;\n            }\n        }\n    }\n}",
+      "comments": [
+        {
+          "line": 2,
+          "code": "for (int i = 0; i < n-1; i++) {",
+          "comment": "Outer loop: each pass places the next largest element at its correct position",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 3,
+          "code": "for (int j = 0; j < n-i-1; j++) {",
+          "comment": "Inner loop: compare adjacent elements and swap if they are in wrong order",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 4,
+          "code": "if (arr[j] > arr[j+1]) {",
+          "comment": "Swap elements only when they are out of order",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 5,
+          "code": "int temp = arr[j];",
+          "comment": "Store the element temporarily to avoid overwriting it",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 6,
+          "code": "arr[j] = arr[j+1];",
+          "comment": "Move the larger element to the front",
+          "label": "wrong",
+          "why": "Inverted. The assignment moves the *smaller* element down to j; the larger one travels toward the back of the array."
+        },
+        {
+          "line": 7,
+          "code": "arr[j+1] = temp;",
+          "comment": "Place the stored element at its correct position",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 11,
+          "code": "}",
+          "comment": "No action needed for the last element of the current pass",
+          "label": "wrong",
+          "why": "Meaningless. Anchored to the function's closing brace, and it describes the inner loop's bound rather than the line it names."
+        }
+      ]
+    },
+    {
+      "name": "graph_and_lis",
+      "code": "#include <iostream>\n#include <vector>\n#include <queue>\n#include <limits>\n#include <algorithm>\n#include <functional>\nusing namespace std;\n\nclass Graph {\nprivate:\n    int V;\n    vector<vector<pair<int, int>>> adj;\n\npublic:\n    Graph(int vertices) : V(vertices), adj(vertices) {}\n\n    void addEdge(int u, int v, int weight) {\n        if (u < 0 || v < 0 || u >= V || v >= V || weight < 0)\n            return;\n\n        adj[u].push_back({v, weight});\n    }\n\n    vector<int> shortestPath(int source) {\n        vector<int> distance(V, numeric_limits<int>::max());\n        vector<int> parent(V, -1);\n\n        priority_queue<pair<int, int>, vector<pair<int, int>>, greater<pair<int, int>>> pq;\n\n        distance[source] = 0;\n        pq.push({0, source});\n\n        while (!pq.empty()) {\n            auto [currentDistance, u] = pq.top();\n            pq.pop();\n\n            if (currentDistance > distance[u])\n                continue;\n\n            for (const auto& edge : adj[u]) {\n                int v = edge.first;\n                int weight = edge.second;\n\n                if (distance[u] != numeric_limits<int>::max() &&\n                    distance[u] + weight < distance[v]) {\n                    distance[v] = distance[u] + weight;\n                    parent[v] = u;\n                    pq.push({distance[v], v});\n                }\n            }\n        }\n\n        return distance;\n    }\n\n    void printAllPaths(int source, int destination) {\n        vector<bool> visited(V, false);\n        vector<int> path;\n\n        function<void(int)> dfs = [&](int current) {\n            visited[current] = true;\n            path.push_back(current);\n\n            if (current == destination) {\n                for (size_t i = 0; i < path.size(); ++i) {\n                    cout << path[i];\n                    if (i + 1 < path.size())\n                        cout << \" -> \";\n                }\n                cout << endl;\n            } else {\n                for (const auto& edge : adj[current]) {\n                    int next = edge.first;\n\n                    if (!visited[next])\n                        dfs(next);\n                }\n            }\n\n            path.pop_back();\n            visited[current] = false;\n        };\n\n        dfs(source);\n    }\n};\n\nint longestIncreasingSubsequence(const vector<int>& nums) {\n    if (nums.empty())\n        return 0;\n\n    vector<int> dp(nums.size(), 1);\n\n    for (size_t i = 1; i < nums.size(); ++i) {\n        for (size_t j = 0; j < i; ++j) {\n            if (nums[j] < nums[i]) {\n                dp[i] = max(dp[i], dp[j] + 1);\n            }\n        }\n    }\n\n    return *max_element(dp.begin(), dp.end());\n}\n\nint main() {\n    Graph graph(6);\n\n    graph.addEdge(0, 1, 4);\n    graph.addEdge(0, 2, 2);\n    graph.addEdge(1, 2, 5);\n    graph.addEdge(1, 3, 10);\n    graph.addEdge(2, 4, 3);\n    graph.addEdge(4, 3, 4);\n    graph.addEdge(3, 5, 11);\n\n    vector<int> distances = graph.shortestPath(0);\n\n    for (int i = 0; i < distances.size(); ++i) {\n        cout << \"Distance to \" << i << \": \";\n\n        if (distances[i] == numeric_limits<int>::max())\n            cout << \"INF\";\n        else\n            cout << distances[i];\n\n        cout << endl;\n    }\n\n    graph.printAllPaths(0, 5);\n\n    vector<int> values = {10, 9, 2, 5, 3, 7, 101, 18};\n\n    cout << \"LIS length: \"\n         << longestIncreasingSubsequence(values)\n         << endl;\n\n    return 0;\n}",
+      "comments": [
+        {
+          "line": 12,
+          "code": "vector<vector<pair<int, int>>> adj;",
+          "comment": "adjacency list where each entry holds a list of (neighbor, weight) pairs",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 18,
+          "code": "if (u < 0 || v < 0 || u >= V || v >= V || weight < 0)",
+          "comment": "Reject edges that violate the graph's vertex and weight constraints.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 19,
+          "code": "return;",
+          "comment": "If any condition fails, the edge is ignored.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 21,
+          "code": "adj[u].push_back({v, weight});",
+          "comment": "Insert the edge into the adjacency list; the pair {v, weight} is copied.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 45,
+          "code": "distance[u] + weight < distance[v]) {",
+          "comment": "Relax only if the edge leads to a shorter path.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 46,
+          "code": "distance[v] = distance[u] + weight;",
+          "comment": "Update the shortest distance and record the predecessor.",
+          "label": "wrong",
+          "why": "Over-claims. Nothing on this line records a predecessor; parent[v] = u is the next line."
+        },
+        {
+          "line": 48,
+          "code": "pq.push({distance[v], v});",
+          "comment": "Insert the vertex into the priority queue for future relaxation.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 57,
+          "code": "vector<bool> visited(V, false);",
+          "comment": "mark all vertices as unvisited",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 58,
+          "code": "vector<int> path;",
+          "comment": "stores the current path being explored",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 60,
+          "code": "function<void(int)> dfs = [&](int current) {",
+          "comment": "depth‑first search helper",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 61,
+          "code": "visited[current] = true;",
+          "comment": "mark current vertex as visited",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 62,
+          "code": "path.push_back(current);",
+          "comment": "add vertex to the current path",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 65,
+          "code": "for (size_t i = 0; i < path.size(); ++i) {",
+          "comment": "output the entire path when it reaches the destination",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 70,
+          "code": "cout << endl;",
+          "comment": "end the line after printing all vertices",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 72,
+          "code": "for (const auto& edge : adj[current]) {",
+          "comment": "explore all outgoing edges from the current vertex",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 73,
+          "code": "int next = edge.first;",
+          "comment": "get the target vertex of the edge",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 75,
+          "code": "if (!visited[next])",
+          "comment": "only recurse if the target has not been visited yet",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 76,
+          "code": "dfs(next);",
+          "comment": "continue DFS from the neighbor",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 80,
+          "code": "path.pop_back();",
+          "comment": "backtrack: remove the last vertex from the path",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 81,
+          "code": "visited[current] = false;",
+          "comment": "mark current vertex as unvisited for future paths",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 84,
+          "code": "dfs(source);",
+          "comment": "start DFS from the source vertex",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 86,
+          "code": "};",
+          "comment": "No explicit destructor needed; the class is trivially destructible.",
+          "label": "wrong",
+          "why": "False. Graph holds a vector<vector<pair<int,int>>>, which is not trivially destructible. Anchored to a closing brace."
+        },
+        {
+          "line": 89,
+          "code": "if (nums.empty())",
+          "comment": "If the input vector is empty, there cannot be any increasing subsequence.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 92,
+          "code": "vector<int> dp(nums.size(), 1);",
+          "comment": "dp[i] will store the length of the longest increasing subsequence ending at index i.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 94,
+          "code": "for (size_t i = 1; i < nums.size(); ++i) {",
+          "comment": "Iterate over each element starting from the second one.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 95,
+          "code": "for (size_t j = 0; j < i; ++j) {",
+          "comment": "Compare with every previous element to find the longest subsequence that can be extended.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 96,
+          "code": "if (nums[j] < nums[i]) {",
+          "comment": "If the current element is greater than the previous element, extending the subsequence ending at j can lead to a longer subsequence ending at i.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 97,
+          "code": "dp[i] = max(dp[i], dp[j] + 1);",
+          "comment": "Update dp[i] with the maximum length found so far.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 102,
+          "code": "return *max_element(dp.begin(), dp.end());",
+          "comment": "Return the maximum value in dp, which represents the length of the longest increasing subsequence.",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 106,
+          "code": "Graph graph(6);",
+          "comment": "Create a graph with 6 vertices",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 108,
+          "code": "graph.addEdge(0, 1, 4);",
+          "comment": "Add edges to the graph; each edge is (source, target, weight)",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 109,
+          "code": "graph.addEdge(0, 2, 2);",
+          "comment": "0 → 1: weight 4",
+          "label": "wrong",
+          "why": "Describes the previous line's edge. This line adds (0, 2, 2); the comment reports (0, 1, 4) from the line above."
+        },
+        {
+          "line": 110,
+          "code": "graph.addEdge(1, 2, 5);",
+          "comment": "1 → 2: weight 5",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 111,
+          "code": "graph.addEdge(1, 3, 10);",
+          "comment": "1 → 3: weight 10",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 112,
+          "code": "graph.addEdge(2, 4, 3);",
+          "comment": "2 → 4: weight 3",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 113,
+          "code": "graph.addEdge(4, 3, 4);",
+          "comment": "4 → 3: weight 4",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 114,
+          "code": "graph.addEdge(3, 5, 11);",
+          "comment": "3 → 5: weight 11",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 116,
+          "code": "vector<int> distances = graph.shortestPath(0);",
+          "comment": "Compute shortest path distances from vertex 0 to all others",
+          "label": "correct",
+          "why": ""
+        },
+        {
+          "line": 118,
+          "code": "for (int i = 0; i < distances.size(); ++i) {",
+          "comment": "Print each distance; INF indicates unreachable",
+          "label": "correct",
+          "why": ""
+        }
+      ]
+    }
+  ]
+}

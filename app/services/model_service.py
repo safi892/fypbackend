@@ -396,6 +396,7 @@ def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutp
                     "dropped": result.report.dropped,
                     "dropped_punctuation": result.report.dropped_punctuation,
                     "dropped_numeric": result.report.dropped_numeric,
+                    "rejected_semantic": result.report.rejected_semantic,
                     "chunks": result.chunks,
                 },
                 verified=True,
