@@ -139,3 +139,34 @@ class AnalyzeResponse(BaseModel):
         description="True when the generated commented code failed the C++ "
         "syntax gate and should be checked by a human before being trusted.",
     )
+
+
+class OptimizeRequest(BaseModel):
+    """Ask for a faster version of one function."""
+
+    code: str = Field(..., min_length=1, description="Source code to optimize")
+    source: str | None = Field(None, description="Client identifier, e.g. mobile")
+    language: str = Field("cpp", description="Source language (currently cpp)")
+
+
+class OptimizeResponse(BaseModel):
+    """The rewrite, and the evidence for it.
+
+    ``verified`` is the field that matters. The optimizer compiles the proposal
+    next to the original and runs both on the same inputs; a rewrite that
+    disagrees is discarded and ``code`` comes back as the caller sent it. A
+    client should show ``verified`` rather than implying every rewrite was
+    proven, because some shapes cannot be checked automatically.
+    """
+
+    input_code: str
+    code: str = Field(..., description="The rewrite, or the original when none was accepted")
+    changed: bool = Field(False, description="True when the returned code differs from the input")
+    verified: bool = Field(
+        False,
+        description="True when the rewrite was compiled, executed and matched the original",
+    )
+    speedup: float = Field(
+        0.0, description="Measured ratio, 0 when the work was too small to time reliably"
+    )
+    note: str = Field("", description="Human-readable summary of what was checked")

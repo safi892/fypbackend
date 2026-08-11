@@ -11,7 +11,14 @@ task and makes the pipeline order explicit and easy to follow/test.
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.model_processing.syntax_check import check_cpp_syntax
-from app.schemas.analyze import AnalyzeRequest, AnalyzeResponse, AnchorStats, LineComment
+from app.schemas.analyze import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AnchorStats,
+    LineComment,
+    OptimizeRequest,
+    OptimizeResponse,
+)
 from app.schemas.history import HistoryListResponse
 from app.services import (
     comment_service,
@@ -19,6 +26,7 @@ from app.services import (
     documentation_service,
     explanation_service,
     model_service,
+    optimization_service,
     review_service,
     translation_service,
 )
@@ -106,6 +114,41 @@ def analyze(
     )
 
     return response
+
+
+@router.post("/optimize", response_model=OptimizeResponse)
+def optimize(
+    payload: OptimizeRequest,
+    authorization: str | None = Header(default=None),
+) -> OptimizeResponse:
+    """Return a faster version of the submitted code, if one can be proven.
+
+    Problem solved: commenting and explaining describe code; this changes it,
+    which is a different promise. A rewrite that is merely plausible is worse
+    than none, so the proposal is compiled beside the original, both are run on
+    the same inputs, and it is only returned when the outputs agree.
+
+    Why the original comes back on failure rather than an error: a client
+    asking for a faster version should never be handed code that computes
+    something else, and should never be handed nothing either. ``changed`` and
+    ``verified`` say which case this is.
+
+    :param payload: the code to optimize.
+    :param authorization: bearer token header (may be ``None`` -> 401).
+    :return: the code to show plus the evidence for it.
+    :raises HTTPException: 401 if unauthenticated.
+    """
+    require_user(authorization)
+
+    result = optimization_service.optimize_checked(payload.code)
+    return OptimizeResponse(
+        input_code=payload.code.strip(),
+        code=result.code,
+        changed=result.changed,
+        verified=result.verified,
+        speedup=round(result.speedup, 2),
+        note=result.note,
+    )
 
 
 @router.get("/analyze/history", response_model=HistoryListResponse)

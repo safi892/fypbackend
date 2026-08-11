@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.database import initialize_database
 from app.routers.analyze import router as analyze_router
 from app.routers.auth import router as auth_router
+from app.routers.health import router as ready_router
 
 app = FastAPI(title="Code Analyzer API", version="0.2.0")
 
@@ -52,3 +53,4 @@ def startup_event() -> None:
 
 app.include_router(analyze_router)
 app.include_router(auth_router)
+app.include_router(ready_router)
