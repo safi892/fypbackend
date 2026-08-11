@@ -14,7 +14,7 @@ from app.model_processing.comment_rules import generate_rule_based_comments, has
 from app.model_processing.repair import repair_code
 
 
-def generate(code: str, raw_commented_code: str = "") -> str:
+def generate(code: str, raw_commented_code: str = "", *, verified: bool = False) -> str:
     """Return editor-ready commented C++ code for the given source.
 
     Problem solved: choose the best available commented code. Why prefer the raw
@@ -24,11 +24,21 @@ def generate(code: str, raw_commented_code: str = "") -> str:
     raw model output already preserves indentation and inline ``//`` placement
     better than moving every comment to its own line, so we pass it through as-is.
 
+    Why ``verified`` bypasses everything: an anchored backend returns the
+    caller's own source with comments appended, already checked line by line.
+    Repairing or replacing that could only move it away from what the user
+    sent. ``repair_code`` happens to leave valid code alone today, so this
+    guards the guarantee rather than fixing a present bug.
+
     :param code: the original C++ source.
     :param raw_commented_code: model-produced commented code (may be empty).
+    :param verified: the commented code was checked against ``code`` already.
     :return: the final commented code string.
     """
     commented = (raw_commented_code or "").strip()
+
+    if verified and commented:
+        return commented
 
     if has_meaningful_comments(commented):
         return repair_code(commented)

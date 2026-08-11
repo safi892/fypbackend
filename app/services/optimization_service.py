@@ -12,12 +12,17 @@ always gets something safe.
 
 from __future__ import annotations
 
+import logging
 import re
+from dataclasses import dataclass
 
-from app.core.config import RAW_MAX_NEW_TOKENS, RAW_NUM_BEAMS
+from app.core.config import MODEL_BACKEND, RAW_MAX_NEW_TOKENS, RAW_NUM_BEAMS
+from app.model_processing import equivalence
 from app.schemas.analyze import StaticAnalysis
 from app.services.analyzer import analyze_code
 from app.services.model_service import generate_text
+
+LOGGER = logging.getLogger(__name__)
 
 _OPT_PROMPT = """You are a C++ optimization expert.
 Rewrite the code below to be more efficient and readable.
@@ -72,21 +77,77 @@ def _extract_code(output: str) -> str:
     return ""
 
 
+@dataclass
+class OptimizationResult:
+    """An optimisation and the evidence for offering it."""
+
+    code: str
+    changed: bool = False
+    verified: bool = False
+    speedup: float = 0.0
+    note: str = ""
+
+
+def optimize_checked(code: str) -> OptimizationResult:
+    """Propose a rewrite and only keep it if running it agrees with the original.
+
+    Problem solved: the previous engine's rewrites were never executed, so a
+    reformatting and a genuine algorithmic change were indistinguishable, and a
+    rewrite that quietly returned different answers would have been served as an
+    improvement. Here the proposal is compiled next to the original, both are
+    run on the same inputs, and it is discarded unless the outputs match.
+
+    Why the original is returned on any doubt: handing back a user's own code
+    is always safe, and a wrong "optimisation" is worse than none.
+
+    :param code: the original C++ source.
+    :return: the code to show, plus whether it was changed and checked.
+    """
+    if MODEL_BACKEND == "qwen_gguf":
+        from app.services import qwen_service
+
+        try:
+            proposal = qwen_service.optimize(code)
+        except qwen_service.LlamaServerUnavailable as exc:
+            LOGGER.error("optimizer: llama-server unavailable: %s", exc)
+            proposal = ""
+    else:
+        analysis: StaticAnalysis | None = analyze_code(code)
+        prompt = build_optimization_prompt(code, analysis)
+        raw = generate_text(prompt, max_new_tokens=RAW_MAX_NEW_TOKENS, num_beams=RAW_NUM_BEAMS)
+        proposal = _extract_code(raw)
+
+    if not proposal or proposal.strip() == code.strip():
+        return OptimizationResult(code=code, note="no rewrite was offered")
+
+    verdict = equivalence.check(code, proposal)
+    if verdict.equivalent:
+        return OptimizationResult(
+            code=proposal,
+            changed=True,
+            verified=True,
+            speedup=verdict.speedup,
+            note=verdict.summary(),
+        )
+    if not verdict.verified:
+        # Could not be checked here - offer it, but say so rather than imply it
+        # was proven.
+        return OptimizationResult(code=proposal, changed=True, note=verdict.summary())
+
+    LOGGER.warning("optimizer: rewrite rejected (%s)", verdict.summary())
+    return OptimizationResult(code=code, note=verdict.summary())
+
+
 def optimize(code: str) -> str:
     """Return an optimized rewrite of the given C++ code.
 
-    Problem solved: single entry point for the optimization task. Why fall back
-    to the original code with a note: a weak/empty model output must not destroy
-    the user's code — we always return something compilable.
+    Kept for callers that want a plain string. Prefer ``optimize_checked``,
+    which also says whether the rewrite was executed and compared.
 
     :param code: the original C++ source.
     :return: the optimized code, or the original code with a fallback note.
     """
-    analysis: StaticAnalysis | None = analyze_code(code)
-    prompt = build_optimization_prompt(code, analysis)
-    raw = generate_text(prompt, max_new_tokens=RAW_MAX_NEW_TOKENS, num_beams=RAW_NUM_BEAMS)
-    optimized = _extract_code(raw)
-
-    if not optimized:
-        return code + "\n\n// (optimizer: model returned no usable rewrite; original kept)"
-    return optimized
+    result = optimize_checked(code)
+    if not result.changed:
+        return code + f"\n\n// (optimizer: {result.note}; original kept)"
+    return result.code

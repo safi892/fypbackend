@@ -111,5 +111,43 @@ TORCH_THREADS = int(os.getenv("TORCH_THREADS", "0"))
 # inspector can show it next to the parsed/selected output.
 DEBUG_MODEL = os.getenv("DEBUG_MODEL", "0") == "1"
 
+# --- Model backend -------------------------------------------------------- #
+# Which engine answers ``run_model``.
+#
+#   "codet5"    the original fine-tuned seq2seq checkpoint, loaded in-process
+#   "qwen_gguf" the Qwen2.5-Coder LoRA, merged and quantised, served by
+#               llama-server over HTTP
+#
+# Kept as a switch rather than a replacement so the two can be compared on the
+# same requests and so a bad deploy is one environment variable away from being
+# undone. The mobile contract is identical either way: the adapter renders the
+# new model's line-anchored output into the ``commented_code`` string the app
+# already expects.
+MODEL_BACKEND = os.getenv("MODEL_BACKEND", "codet5")
+
+# Where llama-server is listening. The server is started outside the app: it
+# loads a multi-gigabyte model once and outlives any single worker, which is
+# the opposite of how the in-process CodeT5 path behaves.
+#
+# Port 8081, not llama.cpp's default 8080: this API already listens on 8080,
+# and the two silently fighting over the socket is a confusing way to find out.
+LLAMA_SERVER_URL = os.getenv("LLAMA_SERVER_URL", "http://127.0.0.1:8081")
+
+# The GGUF weights, inside the project so a checkout is all a teammate needs.
+# Resolved from BASE_DIR rather than the working directory, so the path holds
+# wherever the server is launched from.
+LLAMA_MODEL_PATH = os.getenv(
+    "LLAMA_MODEL_PATH",
+    str(BASE_DIR / "models" / "gguf" / "qwen-cpp-review-q4_k_m.gguf"),
+)
+# Threads for llama-server. 0 lets it choose.
+LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "8"))
+LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "4096"))
+LLAMA_TIMEOUT = float(os.getenv("LLAMA_TIMEOUT", "180"))
+LLAMA_MAX_NEW_TOKENS = int(os.getenv("LLAMA_MAX_NEW_TOKENS", "900"))
+# Chunk budget for whole-file annotation. Matches the training distribution:
+# the model saw functions of roughly fifteen lines and answers those best.
+LLAMA_CHUNK_TOKENS = int(os.getenv("LLAMA_CHUNK_TOKENS", "300"))
+
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
 SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "720"))

@@ -11,7 +11,7 @@ task and makes the pipeline order explicit and easy to follow/test.
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.model_processing.syntax_check import check_cpp_syntax
-from app.schemas.analyze import AnalyzeRequest, AnalyzeResponse
+from app.schemas.analyze import AnalyzeRequest, AnalyzeResponse, AnchorStats, LineComment
 from app.schemas.history import HistoryListResponse
 from app.services import (
     comment_service,
@@ -58,15 +58,19 @@ def analyze(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Task-specific NLP services (each owns its rule-engine / AI-model choice).
-    commented_code = comment_service.generate(payload.code, raw.commented_code)
+    commented_code = comment_service.generate(
+        payload.code, raw.commented_code, verified=raw.verified
+    )
     explanation = explanation_service.generate(payload.code, raw.explanation)
     suggestions = review_service.generate_suggestions(analysis)
     documentation = documentation_service.generate(analysis)
 
     # Safety gate: flag commented code the compiler rejects so clearly broken
     # model output is surfaced for human review rather than trusted blindly.
+    # An anchored backend never regenerates the source, so its output can only
+    # fail this if the submission itself does not compile.
     syntax_ok, _ = check_cpp_syntax(commented_code)
-    needs_review = not syntax_ok
+    needs_review = not syntax_ok and not raw.verified
 
     # Phase 4 — only when the client sent a previous version.
     change_analysis = None
@@ -87,6 +91,9 @@ def analyze(
         documentation=documentation,
         change_analysis=change_analysis,
         translation=translation,
+        line_comments=[LineComment(**item) for item in raw.line_comments],
+        anchor_stats=AnchorStats(**raw.anchor_stats) if raw.anchor_stats else None,
+        verified_comments=raw.verified,
         needs_review=needs_review,
     )
 

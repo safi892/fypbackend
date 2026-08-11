@@ -12,16 +12,19 @@ touching any caller, and the raw output stays testable in isolation.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from app.core.config import (
     FALLBACK_TOKENIZER_PATH,
+    MODEL_BACKEND,
     MODEL_PATH,
     PROMPT_PREFIX,
     RAW_DO_SAMPLE,
@@ -38,6 +41,8 @@ from app.core.config import (
 from app.model_processing.code_formatting import clean_duplicate_code
 from app.schemas.analyze import StaticAnalysis
 
+LOGGER = logging.getLogger(__name__)
+
 # Guards one-time model load across threads.
 _MODEL_LOCK = threading.Lock()
 _MODEL_CACHE: tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device] | None = None
@@ -45,11 +50,24 @@ _MODEL_CACHE: tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device] | None =
 
 @dataclass
 class RawModelOutput:
-    """Raw model output split into sections (either may be empty)."""
+    """Raw model output split into sections (either may be empty).
+
+    ``line_comments`` and ``verified`` are populated only by backends that
+    anchor their comments to real lines. The CodeT5 path rewrites the source,
+    so it can offer neither.
+    """
 
     commented_code: str = ""
     explanation: str = ""
     raw_text: str = ""
+    #: ``{"line", "code", "comment"}`` records already checked against the input.
+    line_comments: list[dict] = dataclass_field(default_factory=list)
+    #: How many anchors were correct, corrected, or discarded as invented.
+    anchor_stats: dict = dataclass_field(default_factory=dict)
+    #: True when ``commented_code`` is the caller's own source with comments
+    #: attached, rather than a model's reconstruction of it. Downstream repair
+    #: and rule-based fallbacks must not touch it when this is set.
+    verified: bool = False
 
 
 def _facts_block(analysis: StaticAnalysis | None) -> str:
@@ -397,6 +415,52 @@ def generate_text(
 
 
 def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutput:
+    """Run the configured engine and return the raw commented-code/explanation.
+
+    Problem solved: this stays the single AI entry point while which model
+    answers becomes configuration. ``MODEL_BACKEND=qwen_gguf`` routes to the
+    Qwen checkpoint served by llama-server; anything else keeps the original
+    CodeT5 path. Why a switch rather than a replacement: the two can be
+    compared on identical requests, and a bad deploy is undone by one
+    environment variable instead of a rollback.
+
+    Why the Qwen path falls back rather than failing: llama-server is a
+    separate process, and a mobile client should get a degraded answer instead
+    of an error when it is not running.
+
+    :param code: the C++ source to analyze.
+    :param analysis: static facts, passed through to the engine that wants them.
+    :return: a ``RawModelOutput`` (either section may be empty).
+    """
+    if MODEL_BACKEND == "qwen_gguf":
+        from app.services import qwen_service
+
+        try:
+            result = qwen_service.run(code)
+        except qwen_service.LlamaServerUnavailable as exc:
+            LOGGER.error("qwen backend unavailable, falling back to codet5: %s", exc)
+        else:
+            return RawModelOutput(
+                commented_code=result.commented_code,
+                explanation=result.explanation,
+                raw_text=result.raw_text,
+                line_comments=[
+                    {"line": a.line, "code": a.code, "comment": a.comment} for a in result.anchors
+                ],
+                anchor_stats={
+                    "kept": result.report.kept,
+                    "proposed": result.report.total,
+                    "exact": result.report.exact,
+                    "relocated": result.report.relocated,
+                    "dropped": result.report.dropped,
+                    "chunks": result.chunks,
+                },
+                verified=True,
+            )
+    return _run_codet5(code, analysis)
+
+
+def _run_codet5(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutput:
     """Run CodeT5 on the code and return the raw commented-code/explanation.
 
     Problem solved: this is the single AI entry point. Why prepend the training

@@ -71,6 +71,35 @@ class DocEntry(BaseModel):
     returns: str = ""
 
 
+class LineComment(BaseModel):
+    """One comment bound to a line of the submitted code.
+
+    ``code`` is that line copied from the request, so a client can show the
+    comment against the user's own text and can check the binding itself
+    instead of trusting it.
+    """
+
+    line: int = Field(..., ge=1, description="1-based line number in the submitted code")
+    code: str = Field(..., description="That line, exactly as submitted")
+    comment: str = Field(..., description="What the model says about it")
+
+
+class AnchorStats(BaseModel):
+    """How many generated comments survived being checked against the code.
+
+    Exposed because it is the honest quality signal for this response:
+    ``dropped`` counts comments about lines the user never wrote, which were
+    discarded rather than shown.
+    """
+
+    proposed: int = 0
+    kept: int = 0
+    exact: int = Field(0, description="Anchors whose line number was already right")
+    relocated: int = Field(0, description="Anchors moved to the line they quoted")
+    dropped: int = Field(0, description="Anchors quoting code absent from the input")
+    chunks: int = Field(0, description="Pieces the file was split into")
+
+
 class ChangeAnalysis(BaseModel):
     """Result of comparing an old vs new code version (Phase 4)."""
 
@@ -95,6 +124,16 @@ class AnalyzeResponse(BaseModel):
     documentation: list[DocEntry] = Field(default_factory=list)
     change_analysis: ChangeAnalysis | None = None
     translation: str | None = None
+    # Structured form of ``commented_code``, when the backend anchors its
+    # comments. Empty on the CodeT5 path, which rewrites the source instead of
+    # annotating it, so nothing can be bound to a line.
+    line_comments: list[LineComment] = Field(default_factory=list)
+    anchor_stats: AnchorStats | None = None
+    verified_comments: bool = Field(
+        False,
+        description="True when commented_code is the submitted source with comments "
+        "attached, rather than a model's rewrite of it.",
+    )
     needs_review: bool = Field(
         False,
         description="True when the generated commented code failed the C++ "
