@@ -61,6 +61,30 @@ TASK_INSTRUCTIONS = {
     ),
 }
 
+#: Appended to the describing tasks. The corpus is entirely working code, so
+#: the trained instruction asks what a function does on the assumption it does
+#: something sensible - and measured on eight deliberately broken programs, the
+#: model described four of them as working, in one case calling an unguarded
+#: ``(low + high) / 2`` a midpoint computed "to avoid overflow".
+#:
+#: This is adopted as a default rather than claimed as an improvement. The
+#: probe behind it (``probe_defects.py`` in the training repository) moved
+#: 3 of 23 problems named to 5, and 4 false descriptions to 3 - one sample out
+#: of eight, which is not an effect worth defending. What it did establish is
+#: that the wording costs nothing: zero invented defects across four correct
+#: programs, and 187 of 187 anchors still valid. Free and slightly in the right
+#: direction is worth having; a measured result it is not.
+DESCRIBE_EFFECTS = (
+    "This code may contain defects. Do not assume it is correct. Describe what each line "
+    "actually does when executed, and where a line's effect differs from what the surrounding "
+    "code appears intended to achieve, say so plainly."
+)
+
+#: Only the tasks the probe covered. ``optimize`` is left alone: it was never
+#: measured with this wording, and its instruction already tells the model the
+#: code may be improvable, so the two could pull against each other.
+DESCRIBE_EFFECTS_TASKS = frozenset({"line_comments", "explanation"})
+
 FIELD_FOR_TASK = {
     "line_comments": "line_comments",
     "explanation": "explanation",
@@ -102,6 +126,8 @@ def build_prompt(code: str, task: str) -> str:
         f"Generate:\n- {TASK_INSTRUCTIONS[task]}\n\n"
         "Return a single JSON object using the requested field names."
     )
+    if task in DESCRIBE_EFFECTS_TASKS:
+        instruction = f"{instruction}\n\n{DESCRIBE_EFFECTS}"
     return (
         f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n"
         f"<|im_start|>user\n{instruction}\n\n### Code\n\n```cpp\n{code}\n```<|im_end|>\n"
