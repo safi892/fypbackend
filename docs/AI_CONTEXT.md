@@ -68,7 +68,9 @@ CONSTRAINTS
 - Python 3.11 (torch 2.0.1 has no 3.13 wheels), numpy<2 (torch 2.0.1 ABI)
 - ruff with ANN rules: type annotations are enforced, line length 100
 - mypy strict
-- 59 tests, all passing: .venv/bin/python -m pytest -q
+- 63 tests, all passing: .venv/bin/python -m pytest -q
+  (four of them exercise the model end to end, so llama-server must be
+   running or they fail with a 503)
 - models/ is gitignored; the 940 MB GGUF is shared out of band
 - The response contract is additive only. input_code, commented_code and
   explanation come first and must not change shape - an Android client depends

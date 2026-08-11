@@ -428,6 +428,12 @@ def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutp
     separate process, and a mobile client should get a degraded answer instead
     of an error when it is not running.
 
+    Why the fallback's own failure is not the error reported: on a machine that
+    has only the Qwen model, falling back reaches a CodeT5 checkpoint that is
+    not installed, and "Model path not found: .../checkpoint_best" names
+    something the operator did not choose and cannot act on. The cause is that
+    llama-server is down, so that is what gets raised.
+
     :param code: the C++ source to analyze.
     :param analysis: static facts, passed through to the engine that wants them.
     :return: a ``RawModelOutput`` (either section may be empty).
@@ -438,7 +444,12 @@ def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutp
         try:
             result = qwen_service.run(code)
         except qwen_service.LlamaServerUnavailable as exc:
-            LOGGER.error("qwen backend unavailable, falling back to codet5: %s", exc)
+            LOGGER.error("qwen backend unavailable, trying codet5: %s", exc)
+            try:
+                return _run_codet5(code, analysis)
+            except (FileNotFoundError, RuntimeError) as fallback_error:
+                LOGGER.error("codet5 fallback also unavailable: %s", fallback_error)
+                raise RuntimeError(str(exc)) from exc
         else:
             return RawModelOutput(
                 commented_code=result.commented_code,
