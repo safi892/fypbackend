@@ -3,26 +3,58 @@ name = "fyp-cpp-code-review-backend"
 version = "0.2.0"
 description = "Hybrid C++ code-review backend (FastAPI): deterministic static analysis + AI generation, backward compatible with the existing mobile client."
 readme = "README.md"
-requires-python = ">=3.11"
+# 3.11 is what this is developed and tested on. 3.12 is untested here mainly
+# because torch 2.0.1, which the CodeT5 backend needs, has no 3.12 wheels.
+requires-python = ">=3.11,<3.13"
+
 dependencies = [
-    "fastapi[standard]>=0.135.2",
-    "huggingface_hub>=0.23.1",
-    "numpy<2",
-    "protobuf>=7.34.1",
-    "sentencepiece>=0.2.1",
-    "torch==2.0.1",
-    "transformers==4.46.2",
-    "tree-sitter>=0.23,<0.26",
-    "tree-sitter-cpp>=0.23,<0.24",
-    "uvicorn[standard]>=0.42.0",
+    # --- Web layer ---------------------------------------------------------
+    "fastapi[standard]>=0.135.2",   # tested with 0.135.2
+    "uvicorn[standard]>=0.42.0",    # tested with 0.42.0
+
+    # --- C++ parsing -------------------------------------------------------
+    # Used by the static analyzer and by the chunker that splits a file into
+    # function-sized pieces before sending it to the model. The upper bounds
+    # matter: the Python bindings changed their Language/Parser constructor
+    # between minor releases.
+    "tree-sitter>=0.23,<0.26",      # tested with 0.25.2
+    "tree-sitter-cpp>=0.23,<0.24",  # tested with 0.23.4
+
+    # --- CodeT5 backend (MODEL_BACKEND=codet5) -----------------------------
+    # Only this engine loads a model in-process. The Qwen backend talks to
+    # llama-server over HTTP and needs none of the four below, so a deployment
+    # that has settled on qwen_gguf can drop them and save about 2 GB.
+    # They stay required for now because model_service imports torch at module
+    # level; making them optional means making that import lazy first.
+    "torch==2.0.1",                 # pinned: newer torch changes seq2seq beam search
+    "transformers==4.46.2",         # pinned: must match the CodeT5 checkpoint
+    "sentencepiece>=0.2.1",         # tested with 0.2.1 - CodeT5 tokenizer
+    "huggingface_hub>=0.23.1",      # tested with 0.36.2 - checkpoint resolution
+    "protobuf>=7.34.1",             # tested with 7.34.1 - required by sentencepiece
+    # torch 2.0.1 was built against the NumPy 1.x ABI; NumPy 2 breaks tensor
+    # conversion at runtime rather than at install time.
+    "numpy<2",                      # tested with 1.26.4
 ]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.6.0",
-    "mypy>=1.11.0",
-    "pytest>=8.0.0",
-    "httpx>=0.27.0",
+    "ruff>=0.6.0",                  # tested with 0.15.22
+    "mypy>=1.11.0",                 # tested with 2.3.0
+    "pytest>=8.0.0",                # tested with 9.1.1
+    "httpx>=0.27.0",                # tested with 0.28.1 - FastAPI TestClient
+]
+
+# The Qwen backend needs no Python packages of its own: it uses urllib and json
+# from the standard library. What it does need is outside pip - see
+# docs/SETUP.md for llama.cpp and the model weights.
+
+[project.optional-dependencies]
+# The notebooks under notebooks/ need a kernel. Declared here because `uv sync`
+# prunes anything not listed, and finding out by having Jupyter stop working is
+# an unpleasant way to learn that. Install with: uv sync --extra notebooks
+notebooks = [
+    "ipykernel>=6.29",
+    "jupyter>=1.0",
 ]
 
 
