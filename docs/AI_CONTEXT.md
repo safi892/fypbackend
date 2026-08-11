@@ -45,7 +45,22 @@ hallucinations dropped, 29 line numbers silently corrected.
 
 Known limitation: this proves a comment is attached to a line that exists and is
 quoted correctly. It does NOT prove the comment is true of that line. Roughly
-9% of comments on real code are still factually wrong.
+10% of comments on real code are still factually wrong.
+
+Part of that gap is now closed, and the closure is measured. Three rules
+discard comments that are provably untrue of their line: one on lines carrying
+only punctuation (a brace has nothing to be about, and the model fills the gap
+with invention), one on comments citing numbers their line does not contain,
+and one AST stage that rejects claims of iteration or recursion the syntax tree
+refutes plus names cited as code that the enclosing function never mentions.
+Against 46 hand-labelled comments (scripts/comment_validator_fixture.json,
+replayed by scripts/eval_comment_validator.py): 5 wrong, 3 rejected, 0 correct
+comments lost - precision 1.00, recall 0.60. What remains uncaught is the class
+that needs real semantics, e.g. "move the larger element to the front" on a
+line that moves the smaller one. anchor_stats reports every rejection.
+
+46 comments over two programs is enough to tune precision and to demonstrate
+the method. It is not enough for a tight interval on the error rate.
 
 OTHER THINGS THAT LOOK ODD BUT ARE DELIBERATE
 - Files are split on syntax boundaries before being sent. The checkpoint was
@@ -68,7 +83,7 @@ CONSTRAINTS
 - Python 3.11 (torch 2.0.1 has no 3.13 wheels), numpy<2 (torch 2.0.1 ABI)
 - ruff with ANN rules: type annotations are enforced, line length 100
 - mypy strict
-- 63 tests, all passing: .venv/bin/python -m pytest -q
+- 90 tests, all passing: .venv/bin/python -m pytest -q
   (four of them exercise the model end to end, so llama-server must be
    running or they fail with a 503)
 - models/ is gitignored; the 940 MB GGUF is shared out of band

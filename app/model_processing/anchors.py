@@ -50,6 +50,10 @@ class AnchorReport:
     dropped: int = 0
     dropped_punctuation: int = 0
     dropped_numeric: int = 0
+    #: Anchors discarded after repair by ``comment_validation``, for saying
+    #: something the syntax tree refutes rather than for quoting a line that
+    #: does not exist.
+    rejected_semantic: int = 0
 
     @property
     def total(self) -> int:
@@ -57,7 +61,15 @@ class AnchorReport:
 
     @property
     def kept(self) -> int:
-        return self.exact + self.relocated
+        """How many anchors actually survived to the response.
+
+        Counted rather than derived from ``exact + relocated``, which is what
+        this used to be and what it can no longer mean: anchors are also
+        discarded *after* repair — by semantic validation, by the whole-file
+        gate, and by chunk-overlap deduplication — and that sum keeps counting
+        them. ``kept + dropped`` therefore need not equal ``total``.
+        """
+        return len(self.anchors)
 
 
 def _is_punctuation_only(line: str) -> bool:

@@ -45,9 +45,10 @@ def analyze(
     """Run the full code-review pipeline and persist history.
 
     Problem solved: this is the one entry point the mobile client calls. Why
-    additive pipeline: static analysis (fast) feeds the model prompt, the model
-    feeds the comment/explanation tasks, and optional stages (diff, translation)
-    only run when requested — so old clients and new clients both work.
+    additive pipeline: static analysis (fast) feeds the response and the
+    rule-based services, the model feeds the comment/explanation tasks, and
+    optional stages (diff, translation) only run when requested — so old
+    clients and new clients both work.
 
     :param payload: the validated analysis request.
     :param authorization: bearer token header (may be ``None`` -> 401).
@@ -56,7 +57,8 @@ def analyze(
     """
     user = require_user(authorization)
 
-    # Phase 3 — deterministic static analysis (cheap, feeds the prompt).
+    # Phase 3 — deterministic static analysis (cheap; feeds the response and
+    # the rule-based services below, never a model prompt).
     analysis = static_analyze(payload.code, language=payload.language)
 
     # Shared AI backend (CodeT5): a single inference returning raw sections.
@@ -76,8 +78,12 @@ def analyze(
     # Safety gate: flag commented code the compiler rejects so clearly broken
     # model output is surfaced for human review rather than trusted blindly.
     # An anchored backend never regenerates the source, so its output can only
-    # fail this if the submission itself does not compile.
-    syntax_ok, _ = check_cpp_syntax(commented_code)
+    # fail this if the submission itself does not compile — and the gate is a
+    # compiler subprocess with a 20-second timeout whose answer is then thrown
+    # away. Only pay for it when a backend actually rewrote the code.
+    syntax_ok = True
+    if not raw.verified:
+        syntax_ok, _ = check_cpp_syntax(commented_code)
 
     # `needs_review` keeps its name and type because an Android client reads it,
     # but the old rule made it a poor signal: an anchored backend can only fail
@@ -85,7 +91,8 @@ def analyze(
     # on every well-formed request — including ones where comments were thrown
     # away for being untrue of their line. Discarded anchors mean the model was
     # drifting on this input, and what survived deserves a second look.
-    discarded = raw.anchor_stats.get("dropped", 0) if raw.anchor_stats else 0
+    stats = raw.anchor_stats or {}
+    discarded = stats.get("dropped", 0) + stats.get("rejected_semantic", 0)
     needs_review = (not syntax_ok and not raw.verified) or discarded > 0
 
     # Phase 4 — only when the client sent a previous version.

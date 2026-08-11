@@ -4,7 +4,12 @@ Problem solved
 --------------
 Before any AI runs, we need structured, *ground-truth* facts about the code
 (functions, recursion, loop nesting, missing docs, complexity). These facts
-feed the prompt builder, the suggestion generator and the frontend. Doing this
+feed the response itself, the suggestion generator, the documentation service
+and the comment validator. On the ``/analyze`` path they reach no model prompt
+at all: both checkpoints are fine-tuned on fixed wording and drift on anything
+prepended to it, and the ``run_model`` ``analysis`` argument is accepted and
+ignored. The one exception is ``optimization_service.build_optimization_prompt``
+on the legacy CodeT5 optimizer, which adds a single recursion hint. Doing this
 deterministically (not via the model) keeps it cheap, debuggable and stable.
 
 Why this design
@@ -194,6 +199,15 @@ def _return_type(fn_node: Node) -> str:
     type_node: Node | None = fn_node.child_by_field_name("type")
     if type_node is None:
         return ""
+    # `const` and `static` are siblings of the type field rather than part of
+    # it, so reading the field alone turns `const std::string&` into
+    # `std::string&` and drops the promise the signature is making.
+    prefix = "".join(
+        f"{cpp_parser.node_text(child)} "
+        for child in fn_node.children
+        if child.start_byte < type_node.start_byte
+        and child.type in {"type_qualifier", "storage_class_specifier"}
+    )
     suffix = ""
     declarator: Node | None = fn_node.child_by_field_name("declarator")
     seen = 0
@@ -204,7 +218,7 @@ def _return_type(fn_node: Node) -> str:
             suffix += "&"
         declarator = declarator.child_by_field_name("declarator")
         seen += 1
-    return cpp_parser.node_text(type_node) + suffix
+    return prefix + cpp_parser.node_text(type_node) + suffix
 
 
 def _recursive_lambda(body: Node) -> bool:
