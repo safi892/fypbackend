@@ -14,12 +14,19 @@ so relocating by the quote recovers the rest instead of discarding it.
 
 Why this is duplicated from the training repository rather than imported: that
 package pins ``transformers`` 4.57 and this service pins 4.46, and the backend
-must stay deployable on its own. The logic is small and stable; the alternative
-is a dependency conflict at the top of the stack.
+must stay deployable on its own. The alternative is a dependency conflict at
+the top of the stack.
+
+The two copies have now diverged on purpose. This one additionally discards
+anchors that cannot be *true* of the line they name — see
+``_is_punctuation_only`` and ``_contradicts_its_line``. The training copy must
+not: it measures how well the model anchors, and silently repairing the output
+there would flatter the metric it exists to report.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +48,8 @@ class AnchorReport:
     exact: int = 0
     relocated: int = 0
     dropped: int = 0
+    dropped_punctuation: int = 0
+    dropped_numeric: int = 0
 
     @property
     def total(self) -> int:
@@ -49,6 +58,50 @@ class AnchorReport:
     @property
     def kept(self) -> int:
         return self.exact + self.relocated
+
+
+def _is_punctuation_only(line: str) -> bool:
+    """Say whether a line carries no name, keyword or number to describe.
+
+    A comment anchored to ``}`` or ``};`` has nothing to be about, and the
+    model fills the gap with invention: measured examples include "No action
+    needed for the last element of the current pass" on a function's closing
+    brace, and "the class is trivially destructible" on a class that holds a
+    ``std::vector`` and therefore is not.
+
+    ``else`` and ``break`` are deliberately *not* punctuation — comments on
+    those are routinely useful ("target lies in the lower half").
+    """
+    return not any(character.isalnum() for character in line)
+
+
+#: Integer literals, ignoring those glued to identifiers (``arr2`` is a name,
+#: not the number two). Used to compare a comment's numbers against its line's.
+_INTEGER = re.compile(r"(?<![\w.])\d+(?![\w.])")
+
+
+def _contradicts_its_line(comment: str, line: str) -> bool:
+    """Say whether a comment cites numbers that its line does not contain.
+
+    This catches the one failure mode quoting cannot: the model pairs the right
+    quoted line with the *wrong* comment. Measured on a real file, a comment
+    reading "0 -> 1: weight 4" was attached to ``graph.addEdge(0, 2, 2);`` —
+    the quote was exact and unique, so relocation had nothing to correct, and
+    the comment described the previous line's edge.
+
+    Deliberately narrow. It applies only when both sides carry integer
+    literals, so ordinary prose about a numeric line is untouched, and it asks
+    only that the comment's numbers appear in the line — a comment may say less
+    than the line, never more. Checked against every correct comment in the
+    measured sample: it fires on none of them.
+    """
+    quoted = set(_INTEGER.findall(comment))
+    if not quoted:
+        return False
+    present = set(_INTEGER.findall(line))
+    if not present:
+        return False
+    return not quoted <= present
 
 
 def repair_anchors(code: str, raw: list[dict[str, Any]]) -> AnchorReport:
@@ -82,7 +135,19 @@ def repair_anchors(code: str, raw: list[dict[str, Any]]) -> AnchorReport:
             continue
         quoted = quoted.strip()
 
+        # Checked before locating the line: a brace is a brace wherever it is,
+        # and relocating a comment that cannot be true of any of them wastes
+        # the effort and then keeps the result.
+        if _is_punctuation_only(quoted):
+            report.dropped += 1
+            report.dropped_punctuation += 1
+            continue
+
         if isinstance(number, int) and 1 <= number <= len(lines) and lines[number - 1] == quoted:
+            if _contradicts_its_line(comment, quoted):
+                report.dropped += 1
+                report.dropped_numeric += 1
+                continue
             report.anchors.append(Anchor(line=number, code=quoted, comment=comment.strip()))
             report.exact += 1
             continue
@@ -90,6 +155,10 @@ def repair_anchors(code: str, raw: list[dict[str, Any]]) -> AnchorReport:
         candidates = positions.get(quoted)
         if not candidates:
             report.dropped += 1
+            continue
+        if _contradicts_its_line(comment, quoted):
+            report.dropped += 1
+            report.dropped_numeric += 1
             continue
         target = (
             min(candidates, key=lambda c: abs(c - number))

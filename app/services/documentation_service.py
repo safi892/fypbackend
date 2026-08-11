@@ -27,14 +27,17 @@ def generate(analysis: StaticAnalysis) -> list[DocEntry]:
     for fn in analysis.functions:
         if fn.name == "<anonymous>":
             continue
-        parameters = [f"param{i + 1}" for i in range(fn.params)]
+        # Prefer the names the author wrote. The positional fallback stays for
+        # analyses produced before `param_names` existed and for the regex
+        # parser, which cannot see into a parameter list.
+        parameters = fn.param_names or [f"param{i + 1}" for i in range(fn.params)]
         description = _describe(fn)
         docs.append(
             DocEntry(
                 function=fn.name,
                 description=description,
                 parameters=parameters,
-                returns="See function signature for the return type.",
+                returns=fn.returns or "See function signature for the return type.",
             )
         )
     return docs

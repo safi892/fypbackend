@@ -78,7 +78,15 @@ def analyze(
     # An anchored backend never regenerates the source, so its output can only
     # fail this if the submission itself does not compile.
     syntax_ok, _ = check_cpp_syntax(commented_code)
-    needs_review = not syntax_ok and not raw.verified
+
+    # `needs_review` keeps its name and type because an Android client reads it,
+    # but the old rule made it a poor signal: an anchored backend can only fail
+    # the syntax gate if the *submission* does not compile, so it answered false
+    # on every well-formed request — including ones where comments were thrown
+    # away for being untrue of their line. Discarded anchors mean the model was
+    # drifting on this input, and what survived deserves a second look.
+    discarded = raw.anchor_stats.get("dropped", 0) if raw.anchor_stats else 0
+    needs_review = (not syntax_ok and not raw.verified) or discarded > 0
 
     # Phase 4 — only when the client sent a previous version.
     change_analysis = None

@@ -50,7 +50,7 @@ run_tool() {
   else
     local py
     py="$(venv_python)"
-    [ -n "$py" ] || { echo "No uv and no .venv found. Run ./setup.sh first."; exit 1; }
+    [ -n "$py" ] || { echo "No uv and no .venv found. Run 'uv sync' first."; exit 1; }
     "$py" -m "$@"
   fi
 }
@@ -81,7 +81,7 @@ start_server() {
   local venv_py
   venv_py="$(venv_python)"
   if [ -z "$venv_py" ]; then
-    echo "Virtual environment not found. Run ./setup.sh first."
+    echo "Virtual environment not found. Run 'uv sync' first."
     exit 1
   fi
 

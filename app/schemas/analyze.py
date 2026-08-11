@@ -38,6 +38,10 @@ class FunctionInfo(BaseModel):
     end_line: int
     length: int
     params: int
+    param_names: list[str] = Field(
+        default_factory=list, description="Declared parameter names, in order"
+    )
+    returns: str = Field("", description="Declared return type, as written")
     recursive: bool
     max_loop_depth: int
     has_comment: bool
@@ -96,7 +100,13 @@ class AnchorStats(BaseModel):
     kept: int = 0
     exact: int = Field(0, description="Anchors whose line number was already right")
     relocated: int = Field(0, description="Anchors moved to the line they quoted")
-    dropped: int = Field(0, description="Anchors quoting code absent from the input")
+    dropped: int = Field(0, description="Anchors discarded for any reason")
+    dropped_punctuation: int = Field(
+        0, description="Anchors discarded for describing a line holding only punctuation"
+    )
+    dropped_numeric: int = Field(
+        0, description="Anchors discarded for citing numbers their line does not contain"
+    )
     chunks: int = Field(0, description="Pieces the file was split into")
 
 

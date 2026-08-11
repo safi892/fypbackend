@@ -13,11 +13,9 @@ Project structure:
 
 - `app/` contains the FastAPI package
 - `app/main.py` is the FastAPI entrypoint
+- `run_model_server.sh` starts llama.cpp with the model
 - `runserver.sh` starts the API
-- `setup.sh` installs dependencies and prepares the model
-
-
-
+- `uv sync` installs dependencies
 
 
 

@@ -139,27 +139,130 @@ def _max_loop_depth(node: Node, depth: int = 0) -> int:
     return best
 
 
+def _param_names(fn_node: Node) -> list[str]:
+    """Read the declared parameter names, in order.
+
+    Problem solved: the generated documentation used to list ``param1``,
+    ``param2`` while the real names sat in the tree unread, which made the
+    block useless to anyone reading it next to the code.
+
+    Why a positional fallback: an unnamed parameter is legal C++
+    (``void f(int)``), and the position is then the only thing left to say.
+
+    :param fn_node: the ``function_definition`` node.
+    :return: one name per declared parameter.
+    """
+    func_decl: Node | None = _function_declarator(fn_node)
+    if func_decl is None:
+        return []
+    param_list: Node | None = func_decl.child_by_field_name("parameters")
+    if param_list is None:
+        param_list = cpp_parser.find_first(func_decl, {"parameter_list"})
+    if param_list is None:
+        return []
+
+    names: list[str] = []
+    for child in param_list.children:
+        if child.type not in {"parameter_declaration", "optional_parameter_declaration"}:
+            continue
+        declarator: Node | None = child.child_by_field_name("declarator")
+        identifier = (
+            next(iter(cpp_parser.iter_descendants(declarator, {"identifier"})), None)
+            if declarator is not None
+            else None
+        )
+        names.append(
+            cpp_parser.node_text(identifier) if identifier is not None else f"param{len(names) + 1}"
+        )
+    return names
+
+
+def _return_type(fn_node: Node) -> str:
+    """Read the declared return type, including pointer and reference markers.
+
+    Problem solved: the documentation block said "See function signature for
+    the return type" while holding the syntax tree that contains it.
+
+    Why the declarator is walked: ``const std::string& f()`` keeps ``const
+    std::string`` in the type field and the ``&`` on a ``reference_declarator``
+    wrapping the function declarator, so the type field alone reads as a value
+    return when it is not.
+
+    :param fn_node: the ``function_definition`` node.
+    :return: the return type as written, or ``""`` when unresolvable.
+    """
+    type_node: Node | None = fn_node.child_by_field_name("type")
+    if type_node is None:
+        return ""
+    suffix = ""
+    declarator: Node | None = fn_node.child_by_field_name("declarator")
+    seen = 0
+    while declarator is not None and declarator.type != "function_declarator" and seen < 8:
+        if declarator.type == "pointer_declarator":
+            suffix += "*"
+        elif declarator.type == "reference_declarator":
+            suffix += "&"
+        declarator = declarator.child_by_field_name("declarator")
+        seen += 1
+    return cpp_parser.node_text(type_node) + suffix
+
+
+def _recursive_lambda(body: Node) -> bool:
+    """Detect a lambda in ``body`` that calls itself through its own variable.
+
+    Problem solved: measured on a real submission, ``printAllPaths`` was
+    reported as non-recursive while the ``std::function dfs`` inside it called
+    ``dfs`` on every branch. Matching call sites against the *enclosing*
+    function's name cannot see that, so the exponential traversal in the file
+    went unflagged and the optimisation prompt was never given the fact.
+
+    :param body: the enclosing function's body node.
+    :return: ``True`` if a locally declared callable calls itself.
+    """
+    for declarator in cpp_parser.iter_descendants(body, {"init_declarator"}):
+        name_node: Node | None = declarator.child_by_field_name("declarator")
+        value: Node | None = declarator.child_by_field_name("value")
+        if name_node is None or value is None:
+            continue
+        if value.type != "lambda_expression":
+            value = next(iter(cpp_parser.iter_descendants(value, {"lambda_expression"})), None)
+            if value is None:
+                continue
+        name = cpp_parser.node_text(name_node)
+        if not name:
+            continue
+        for call in cpp_parser.iter_descendants(value, {"call_expression"}):
+            callee: Node | None = call.child_by_field_name("function")
+            if callee is not None and cpp_parser.node_text(callee) == name:
+                return True
+    return False
+
+
 def _is_recursive(fn_node: Node, name: str) -> bool:
-    """Detect whether a function calls itself (direct recursion).
+    """Detect whether a function's body contains recursion.
 
     Problem solved: recursion is the signal for the memoization/iterative
     suggestion. Why scan only the body: self-calls outside the function body do
     not make it recursive.
 
+    Both direct self-calls and self-calling local lambdas count. The second is
+    not recursion of *this* function in the strict sense, but it is recursion
+    the reader has to reason about and the caller of this flag wants told.
+
     :param fn_node: the ``function_definition`` node.
     :param name: the resolved function name to match against call sites.
-    :return: ``True`` if the function contains a call to itself.
+    :return: ``True`` if the function body contains a call to itself or to a
+        self-calling local lambda.
     """
-    if not name:
-        return False
     body: Node | None = fn_node.child_by_field_name("body")
     if body is None:
         return False
-    for call in cpp_parser.iter_descendants(body, {"call_expression"}):
-        callee: Node | None = call.child_by_field_name("function")
-        if callee is not None and cpp_parser.node_text(callee) == name:
-            return True
-    return False
+    if name:
+        for call in cpp_parser.iter_descendants(body, {"call_expression"}):
+            callee: Node | None = call.child_by_field_name("function")
+            if callee is not None and cpp_parser.node_text(callee) == name:
+                return True
+    return _recursive_lambda(body)
 
 
 def _has_leading_comment(fn_node: Node) -> tuple[bool, bool]:
@@ -237,6 +340,8 @@ def _ast_analyze(root: Node, code: str, language: str) -> StaticAnalysis:
                 end_line=end_line,
                 length=length,
                 params=params,
+                param_names=_param_names(fn),
+                returns=_return_type(fn),
                 recursive=recursive,
                 max_loop_depth=loop_depth,
                 has_comment=has_comment,

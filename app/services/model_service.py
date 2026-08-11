@@ -70,76 +70,6 @@ class RawModelOutput:
     verified: bool = False
 
 
-def _facts_block(analysis: StaticAnalysis | None) -> str:
-    """Render analyzer facts as a prompt preamble for the model.
-
-    Problem solved: feeding the model explicit ground-truth facts (instead of
-    letting it rediscover them) improves suggestion accuracy and lowers
-    inference cost. Why only a few key facts: keep the prompt short so the
-    model focuses on reasoning, not on re-parsing structure.
-
-    :param analysis: the static analysis, or ``None`` when not computed.
-    :return: a multi-line facts block, or ``""`` when no analysis exists.
-    """
-    if analysis is None:
-        return ""
-    facts: list[str] = [
-        f"- Functions: {analysis.function_count}",
-        f"- Recursive: {analysis.recursive}",
-        f"- Max nested loops: {analysis.max_nested_loops}",
-        f"- Cyclomatic complexity: {analysis.cyclomatic_complexity}",
-    ]
-    if analysis.long_functions:
-        facts.append(f"- Long functions: {', '.join(analysis.long_functions)}")
-    if analysis.missing_comments:
-        facts.append(f"- Functions missing comments: {analysis.missing_comments}")
-    return "\nSTATIC ANALYSIS FACTS (ground truth):\n" + "\n".join(facts) + "\n"
-
-
-def build_prompt(code: str, analysis: StaticAnalysis | None = None) -> str:
-    """Assemble the CodeT5 prompt from source code plus analyzer facts.
-
-    Problem solved: the model performs best with an explicit instruction
-    template (comment rules + output format). Why inject facts here: the router
-    passes the same structure every time, so formatting lives with the engine.
-
-    :param code: the C++ source to review.
-    :param analysis: optional static analysis to embed as ground-truth facts.
-    :return: the complete prompt string for the model.
-    """
-    facts = _facts_block(analysis)
-    return f"""
-You are an expert C++ code reviewer.
-{facts}
-Analyze the following code strictly based on LOGIC, not function or variable names.
-
-INSTRUCTIONS:
-1. First, explain what each condition or expression actually checks.
-2. Then describe what the function really does.
-3. If the logic contradicts the function name, report it as an issue.
-4. Add clear inline comments to the code.
-5. Be precise and avoid generic explanations.
-
-COMMENT RULES:
-- Comment important declarations and initializations, not just loops and if statements.
-- Use context-aware comments that explain why a value is stored or checked.
-- Cover common edge cases such as empty input, null pointers, first/last
-  index setup, and early returns.
-- Keep comments short and natural. Avoid repeating the code word-for-word.
-
-OUTPUT FORMAT:
-
-### COMMENTED CODE
-<code with inline comments>
-
-### EXPLANATION
-<final clean summary>
-
-CODE:
-{code}
-"""
-
-
 def _looks_like_prompt_echo(output: str) -> bool:
     """Detect when the model merely echoed the prompt template back.
 
@@ -464,6 +394,8 @@ def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutp
                     "exact": result.report.exact,
                     "relocated": result.report.relocated,
                     "dropped": result.report.dropped,
+                    "dropped_punctuation": result.report.dropped_punctuation,
+                    "dropped_numeric": result.report.dropped_numeric,
                     "chunks": result.chunks,
                 },
                 verified=True,
