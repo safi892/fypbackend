@@ -192,7 +192,15 @@ without it.
 Port 8081 is deliberate: the API owns 8080, and the two competing for the
 socket is a confusing way to discover the clash.
 
-Stop the model server with `./run_model_server.sh --stop`.
+Managing the model server:
+
+```bash
+./run_model_server.sh --status   # is one already running?
+./run_model_server.sh --stop     # stop it
+```
+
+Starting it twice is harmless — the second call reports that one is already
+serving and exits, rather than failing to bind the port.
 
 ## Confirming it works
 
@@ -250,8 +258,10 @@ The model loads when the server starts, not per request.
 A file is split into function-sized pieces and each is a separate request.
 Roughly a minute per 120 lines on a laptop CPU.
 
-**Port already in use**
-Something else holds 8081. Set `LLAMA_PORT` and `LLAMA_SERVER_URL` to match.
+**`couldn't bind HTTP server socket ... port: 8081`**
+A model server is already running. `./run_model_server.sh --status` will say
+so. If something else holds the port, set `LLAMA_PORT` and `LLAMA_SERVER_URL`
+to a free one.
 
 **Tests fail on `test_analyze_endpoint`**
 Those exercise the model end to end. Start the model server first, or set

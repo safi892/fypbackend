@@ -9,7 +9,8 @@
 # Usage:
 #   ./run_model_server.sh          # start in the foreground
 #   ./run_model_server.sh --bg     # start in the background, log to logs/
-#   ./run_model_server.sh --stop   # stop a background instance
+#   ./run_model_server.sh --stop   # stop a running instance
+#   ./run_model_server.sh --status # say whether one is already running
 #
 # Port 8081, not llama.cpp's default 8080: the FastAPI app listens on 8080, and
 # the two silently fighting over the socket is a confusing way to find out.
@@ -23,9 +24,54 @@ THREADS="${LLAMA_THREADS:-8}"
 CONTEXT="${LLAMA_CONTEXT:-4096}"
 LOG="logs/llama-server.log"
 
+# Is one already serving on this port? Starting a second is the common mistake,
+# and llama.cpp reports it as "couldn't bind HTTP server socket", which says
+# what failed but not that the thing you wanted is already true.
+already_serving() {
+  curl -s --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null | grep -q '"status"'
+}
+
+# `|| true` is load-bearing: lsof exits 1 when nothing holds the port, and with
+# `set -eo pipefail` that would kill the script exactly when the answer is the
+# unremarkable "nothing is running".
+port_owner() {
+  lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1 " (pid " $2 ")"}' || true
+}
+
 if [ "${1:-}" = "--stop" ]; then
   pkill -f "llama-server .*${MODEL##*/}" && echo "stopped" || echo "nothing running"
   exit 0
+fi
+
+if [ "${1:-}" = "--status" ]; then
+  if already_serving; then
+    echo "running: $(port_owner) is serving on port ${PORT}"
+  else
+    owner="$(port_owner)"
+    if [ -n "$owner" ]; then
+      echo "port ${PORT} held by $owner, but it is not answering /health"
+    else
+      echo "not running"
+    fi
+  fi
+  exit 0
+fi
+
+if already_serving; then
+  echo
+  echo "Already running: $(port_owner) is serving on port ${PORT}."
+  echo "Nothing to do - the API can use it as-is."
+  echo
+  echo "  restart:  ./run_model_server.sh --stop && ./run_model_server.sh --bg"
+  echo "  check  :  curl -s localhost:8080/ready"
+  exit 0
+fi
+
+owner="$(port_owner)"
+if [ -n "$owner" ]; then
+  echo "Port ${PORT} is held by $owner, which is not llama-server." >&2
+  echo "Stop it, or set LLAMA_PORT and LLAMA_SERVER_URL to a free port." >&2
+  exit 1
 fi
 
 if ! command -v llama-server >/dev/null 2>&1; then
