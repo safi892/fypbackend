@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `docs/AI_CONTEXT.md` is the human-maintained version of this brief — keep the two in agreement when either changes.
 
+`docs/KNOWN_ISSUES.md` lists the defects found by review and not yet fixed, with the reasoning for each. Check it before reporting something as new, and delete an entry when you fix it rather than leaving it to rot.
+
 ## What this is
 
 A FastAPI backend that reviews C++ for an Android client. `POST /analyze` returns commented code, an explanation and deterministic static analysis; `POST /optimize` returns a faster rewrite that has been compiled and executed against the original. Auth and history live in SQLite.
