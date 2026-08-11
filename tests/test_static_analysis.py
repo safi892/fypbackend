@@ -61,3 +61,57 @@ def test_analyzer_falls_back_gracefully_on_empty_code() -> None:
     analysis = analyze_code("")
     assert analysis.function_count == 0
     assert analysis.parser in {"tree-sitter", "regex-fallback"}
+
+
+def test_recursion_through_a_local_lambda_is_detected() -> None:
+    """Measured miss: a DFS lambda made the traversal exponential, unreported.
+
+    Matching call sites against the enclosing function's name cannot see this,
+    because the call is to the lambda's variable, not to ``walk``.
+    """
+    code = """
+    void walk(int start) {
+        std::function<void(int)> dfs = [&](int current) {
+            for (int next : neighbours(current))
+                dfs(next);
+        };
+        dfs(start);
+    }
+    """
+    analysis = analyze_code(code)
+    assert analysis.functions[0].recursive is True
+    assert analysis.recursive is True
+
+
+def test_a_lambda_that_does_not_call_itself_is_not_recursion() -> None:
+    code = """
+    void walk(int start) {
+        auto visit = [&](int current) { record(current); };
+        visit(start);
+    }
+    """
+    analysis = analyze_code(code)
+    assert analysis.functions[0].recursive is False
+
+
+def test_parameter_names_and_return_type_are_read_from_the_signature() -> None:
+    """These were `param1`, `param2` while the real names sat in the tree."""
+    code = "int addTo(int total, int amount) { return total + amount; }"
+
+    fn = analyze_code(code).functions[0]
+
+    assert fn.param_names == ["total", "amount"]
+    assert fn.returns == "int"
+
+
+def test_a_reference_return_is_not_reported_as_a_value_return() -> None:
+    """The `&` lives on the declarator, so the type field alone would lie."""
+    code = 'const std::string& describe(int code) { return lookup(code); }'
+
+    assert analyze_code(code).functions[0].returns == "const std::string&"
+
+
+def test_an_unnamed_parameter_falls_back_to_its_position() -> None:
+    code = "int ignore(int, int named) { return named; }"
+
+    assert analyze_code(code).functions[0].param_names == ["param1", "named"]

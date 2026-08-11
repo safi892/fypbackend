@@ -57,6 +57,85 @@ def test_malformed_entries_do_not_raise():
     assert report.anchors == [] and report.dropped == 4
 
 
+# --- comments that quote a real line and are still untrue ---------------------- #
+#
+# Quoting proves a comment names a line the user wrote. It does not prove the
+# comment is true of that line, and these are the two cases where the falsehood
+# is detectable without understanding the code.
+
+
+@pytest.mark.parametrize("brace", ["}", "};", "{", "  }  "])
+def test_a_comment_on_a_line_holding_only_punctuation_is_dropped(brace: str):
+    """Measured failure: braces attract invention, because there is nothing to say."""
+    code = f"int f()\n{{\n  return 0;\n{brace}"
+
+    report = repair_anchors(
+        code,
+        [{"line": 4, "code": brace.strip(), "comment": "the class is trivially destructible"}],
+    )
+
+    assert report.anchors == []
+    assert report.dropped_punctuation == 1
+
+
+def test_a_word_on_its_own_line_is_not_treated_as_punctuation():
+    """`else` and `break` earn real comments; only symbols are stripped."""
+    code = "if (a)\n  x();\nelse\n  y();"
+
+    report = repair_anchors(code, [{"line": 3, "code": "else", "comment": "the smaller half"}])
+
+    assert report.kept == 1
+
+
+def test_a_comment_citing_numbers_its_line_does_not_contain_is_dropped():
+    """The failure quoting cannot catch: right line, wrong comment.
+
+    Measured on a real file — this comment belonged to the ``addEdge(0, 1, 4)``
+    on the line above, and the quote was exact, so relocation had nothing to
+    correct.
+    """
+    code = "int main()\n{\n  graph.addEdge(0, 1, 4);\n  graph.addEdge(0, 2, 2);\n}"
+
+    report = repair_anchors(
+        code, [{"line": 4, "code": "graph.addEdge(0, 2, 2);", "comment": "0 -> 1: weight 4"}]
+    )
+
+    assert report.anchors == []
+    assert report.dropped_numeric == 1
+
+
+def test_a_comment_whose_numbers_match_its_line_is_kept():
+    code = "int main()\n{\n  graph.addEdge(1, 2, 5);\n}"
+
+    report = repair_anchors(
+        code, [{"line": 3, "code": "graph.addEdge(1, 2, 5);", "comment": "1 -> 2: weight 5"}]
+    )
+
+    assert report.kept == 1 and report.dropped_numeric == 0
+
+
+def test_prose_about_a_numeric_line_survives():
+    """The check must not punish a comment for declining to repeat the numbers."""
+    code = "int main()\n{\n  graph.addEdge(0, 1, 4);\n}"
+
+    report = repair_anchors(
+        code,
+        [{"line": 3, "code": "graph.addEdge(0, 1, 4);", "comment": "add an edge with its weight"}],
+    )
+
+    assert report.kept == 1
+
+
+def test_a_number_inside_an_identifier_is_not_read_as_a_citation():
+    code = "int main()\n{\n  use(arr2);\n}"
+
+    report = repair_anchors(
+        code, [{"line": 3, "code": "use(arr2);", "comment": "pass the second array"}]
+    )
+
+    assert report.kept == 1
+
+
 # --- the mobile contract ------------------------------------------------------- #
 
 
