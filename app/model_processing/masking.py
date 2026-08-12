@@ -61,6 +61,13 @@ class Masked:
 
     text: str
     spans: list[str] = field(default_factory=list)
+    #: How many times each placeholder legitimately occurs in ``text``.
+    #: Repeats share a placeholder, so "add each value to `total`, then return
+    #: `total`" masks to one span appearing twice. Without this the integrity
+    #: check reads that as a translator duplicating a placeholder and refuses a
+    #: perfectly good sentence - measured on the corpus, 836 explanations in
+    #: 3,000 failed an identity round-trip before the count was tracked.
+    occurrences: list[int] = field(default_factory=list)
 
     @property
     def count(self) -> int:
@@ -88,6 +95,7 @@ def mask(text: str) -> Masked:
     :return: the masked text and the spans removed from it.
     """
     spans: list[str] = []
+    occurrences: list[int] = []
     index: dict[str, int] = {}
 
     def swap(match: re.Match[str]) -> str:
@@ -95,9 +103,11 @@ def mask(text: str) -> Masked:
         if span not in index:
             index[span] = len(spans)
             spans.append(span)
+            occurrences.append(0)
+        occurrences[index[span]] += 1
         return f"{_OPEN}{index[span]}{_CLOSE}"
 
-    return Masked(text=_PROTECTED.sub(swap, text), spans=spans)
+    return Masked(text=_PROTECTED.sub(swap, text), spans=spans, occurrences=occurrences)
 
 
 def restore(translated: str, masked: Masked) -> Restoration:
@@ -132,14 +142,18 @@ def restore(translated: str, masked: Masked) -> Restoration:
             reason=f"translation dropped {dropped!r}",
         )
 
-    duplicated = [n for n in set(numbers) if numbers.count(n) > 1]
-    if duplicated:
-        repeated = masked.spans[duplicated[0]]
-        return Restoration(
-            text=masked.text,
-            ok=False,
-            reason=f"translation repeated {repeated!r}",
-        )
+    # Compared against how many times the placeholder went in, not against one.
+    # A fragment the author repeated is meant to come back repeated.
+    for position, expected in enumerate(masked.occurrences):
+        actual = numbers.count(position)
+        if actual != expected:
+            span = masked.spans[position]
+            verb = "repeated" if actual > expected else "lost a mention of"
+            return Restoration(
+                text=masked.text,
+                ok=False,
+                reason=f"translation {verb} {span!r} ({actual} of {expected})",
+            )
 
     restored = _PLACEHOLDER.sub(lambda m: masked.spans[int(m.group(1))], translated)
     return Restoration(text=restored)

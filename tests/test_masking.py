@@ -96,6 +96,34 @@ def test_a_duplicated_identifier_is_caught():
     assert "total" in result.reason
 
 
+def test_a_fragment_the_author_repeated_is_allowed_to_come_back_repeated():
+    """Repeats share a placeholder, so the count is what must match, not one.
+
+    Found on the corpus: 836 explanations in 3,000 failed an identity
+    round-trip because a legitimately repeated identifier looked like a
+    translator duplicating one.
+    """
+    hidden = mask("Add each value to `total`, then return `total`")
+
+    assert hidden.count == 1, "the repeat shares a placeholder"
+    assert hidden.occurrences == [2], "and is recorded as occurring twice"
+
+    result = restore(hidden.text, hidden)
+
+    assert result.ok, result.reason
+    assert result.text.count("`total`") == 2
+
+
+def test_losing_one_of_two_mentions_is_still_caught():
+    hidden = mask("Add each value to `total`, then return `total`")
+    lost_one = hidden.text.replace("⟦0⟧", "", 1)
+
+    result = restore(lost_one, hidden)
+
+    assert not result.ok
+    assert "total" in result.reason
+
+
 def test_an_invented_placeholder_is_caught():
     """Translators hallucinate structure they have seen in training."""
     hidden = mask(SENTENCE)
