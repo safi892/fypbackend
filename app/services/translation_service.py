@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+from app.model_processing.masking import translate_protecting_code
+
 ROMAN_URDU = "roman_urdu"
 ENGLISH = "english"
 
@@ -52,24 +54,41 @@ def is_roman_urdu(output_language: str | None) -> bool:
     return (output_language or ENGLISH).strip().lower() == ROMAN_URDU
 
 
-def to_roman_urdu(text: str) -> str:
-    """Translate English text to Roman Urdu via phrase substitution.
+def _substitute(text: str) -> str:
+    """Apply the phrase table.
 
-    Problem solved: provide an offline Roman Urdu rendering of generated text.
     Why sort phrases by length (longest first): longer phrases ("into smaller")
     must be matched before their shorter sub-phrases ("smaller") to avoid
     partial, wrong replacements.
-
-    :param text: the English text to translate.
-    :return: the best-effort Roman Urdu translation.
     """
-    if not text:
-        return text
-
     result = text
     for english, roman in sorted(_PHRASES.items(), key=lambda kv: len(kv[0]), reverse=True):
         result = re.sub(rf"\b{re.escape(english)}\b", roman, result, flags=re.IGNORECASE)
     return result
+
+
+def to_roman_urdu(text: str) -> str:
+    """Translate English text to Roman Urdu, protecting the code inside it.
+
+    Problem solved: provide an offline Roman Urdu rendering of generated text.
+
+    Why the masking: these explanations are *about* code and therefore contain
+    code. ``arr[j]`` is not English and has to survive verbatim, but anything
+    that rewrites text will eventually rewrite it, and a comment about a
+    variable that no longer names that variable is worse than untranslated
+    English. Code fragments are hidden before substitution and checked back in
+    afterwards; if any did not return intact, the English is kept.
+
+    The phrase table cannot break this today, because it only matches whole
+    English words. The check is here because this table is explicitly a
+    placeholder for a trained model, and a trained model will be able to.
+
+    :param text: the English text to translate.
+    :return: the Roman Urdu translation, or the input when code did not survive.
+    """
+    if not text:
+        return text
+    return translate_protecting_code(text, _substitute).text
 
 
 def translate(text: str, output_language: str | None) -> str | None:
