@@ -116,6 +116,19 @@ def _keeps_everything(before: str, after: str) -> bool:
     return sorted(_PLACEHOLDER.findall(before)) == sorted(_PLACEHOLDER.findall(after))
 
 
+#: "To calculate the digit count" and "Calculates the digit count" say the same
+#: thing and mean the same thing in Urdu. Measured on the corpus, 470 of the
+#: 758 framable-but-unmatched Purpose lines open with "To" - one pattern, not
+#: 470 verbs. Normalising it here reuses every frame instead of doubling them.
+_INFINITIVE = re.compile(r"^to\s+(\w+)\s+(.+)$", re.I)
+
+
+def _drop_infinitive(body: str) -> str:
+    """Rewrite "To compute X" as "Compute X" so the ordinary frames apply."""
+    match = _INFINITIVE.match(body)
+    return f"{match.group(1)} {match.group(2)}" if match else body
+
+
 def translate_sentence(sentence: str) -> Translation:
     """Translate one sentence if a frame fits it, otherwise hand it back.
 
@@ -131,6 +144,8 @@ def translate_sentence(sentence: str) -> Translation:
 
     if not is_framable(body):
         return Translation(text=sentence)
+
+    body = _drop_infinitive(body)
 
     for pattern, template in FRAMES:
         match = pattern.match(body)
