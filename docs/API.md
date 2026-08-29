@@ -18,7 +18,8 @@ Request:
 
 ```json
 {
-  "code": "int add(int a, int b) { return a + b; }"
+  "code": "int add(int a, int b) { return a + b; }",
+  "output_language": "english"
 }
 ```
 
@@ -28,9 +29,35 @@ Response:
 {
   "input_code": "...",
   "commented_code": "...",
-  "explanation": "..."
+  "explanation": "...",
+  "needs_review": false
 }
 ```
+
+`output_language` is optional. Default is `english`.
+
+For Roman Urdu:
+
+```json
+{
+  "code": "int add(int a, int b) { return a + b; }",
+  "output_language": "roman_urdu"
+}
+```
+
+When `output_language` is `roman_urdu`, prose is translated:
+
+- `explanation` becomes Roman Urdu
+- `commented_code` is rebuilt from the user's original C++ with Roman Urdu
+  comments appended
+- `needs_review` says whether generated comments were dropped or rejected
+
+The public `/analyze` response is intentionally small. Internal fields such as
+`analysis`, `suggestions`, `documentation`, `change_analysis`, `translation`,
+`line_comments`, `anchor_stats`, and `verified_comments` are not returned.
+Time complexity and space complexity are also removed from `explanation`; the
+API returns purpose/input/output/algorithm prose only. The C++ inside
+`input_code` and `commented_code` stays as submitted.
 
 ## Auth
 
@@ -124,17 +151,8 @@ returns 200 — read `ready`, and `next_step` when it is false.
 
 `/health` remains the cheap liveness probe and does not touch the model.
 
-## New fields on POST /analyze
+## Internal analyze fields
 
-All optional and additive; an existing client is unaffected.
-
-| field | meaning |
-| --- | --- |
-| `line_comments` | `{line, code, comment}` records, each checked against the submission |
-| `anchor_stats` | how many comments were proposed, kept, relocated, dropped |
-| `verified_comments` | `commented_code` is the caller's own source with comments attached |
-
-When `verified_comments` is true, `commented_code` contains the submitted source
-verbatim — comments are appended, never a model's rewrite of the code. Comments
-referring to lines that are not in the submission are dropped, and `anchor_stats.dropped`
-counts them.
+The backend still computes static analysis, suggestions, documentation,
+line-comment anchors and anchor stats internally for safety/history, but they
+are not part of the default public `/analyze` response.

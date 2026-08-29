@@ -149,5 +149,12 @@ LLAMA_MAX_NEW_TOKENS = int(os.getenv("LLAMA_MAX_NEW_TOKENS", "900"))
 # the model saw functions of roughly fifteen lines and answers those best.
 LLAMA_CHUNK_TOKENS = int(os.getenv("LLAMA_CHUNK_TOKENS", "300"))
 
+ROMAN_URDU_MODEL_PATH = os.getenv(
+    "ROMAN_URDU_MODEL_PATH",
+    str(BASE_DIR / "models" / "roman-model" / "t5-stage2-c"),
+)
+ROMAN_URDU_NUM_BEAMS = int(os.getenv("ROMAN_URDU_NUM_BEAMS", "4"))
+ROMAN_URDU_MAX_NEW_TOKENS = int(os.getenv("ROMAN_URDU_MAX_NEW_TOKENS", "160"))
+
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
 SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "720"))

@@ -22,6 +22,7 @@ request.
 | Python | **3.11** | 3.13 is excluded: torch 2.0.1 has no wheels for it | yes |
 | llama.cpp | any recent | serves the Qwen model over HTTP | for `qwen_gguf` |
 | GGUF weights | 0.92 GB | not in git, shared separately | for `qwen_gguf` |
+| Roman Urdu model | 0.23 GB | translates generated prose when requested | for `output_language=roman_urdu` |
 | C++ compiler | any C++17 | verifies optimisations by running them | optional |
 
 The C++ compiler is genuinely optional: without it `/analyze` works normally
@@ -155,7 +156,34 @@ Verify:
 c++ --version
 ```
 
-## 6. Configuration
+## 6. Roman Urdu model
+
+Not in git — `models/` is ignored. Put the trained T5 model here:
+
+```
+models/roman-model/t5-stage2-c/
+```
+
+Required files:
+
+```text
+config.json
+generation_config.json
+model.safetensors
+tokenizer.json
+tokenizer_config.json
+```
+
+The default `ROMAN_URDU_MODEL_PATH` points there. If the model is missing or
+cannot load, the backend falls back to the existing frame translator. If the
+model drops a protected code placeholder, the English is returned rather than a
+translation that no longer names the user's code.
+
+Do not copy training checkpoints into the backend. Directories such as
+`checkpoint-*`, optimizer state, scheduler state, RNG state and
+`training_args.bin` are training artifacts; the API does not use them.
+
+## 7. Configuration
 
 Create `.env` in the project root:
 
@@ -176,6 +204,9 @@ worth knowing:
 | `LLAMA_THREADS` | `8` | set to your CPU core count |
 | `LLAMA_CHUNK_TOKENS` | `300` | how large a piece of a file the model sees at once |
 | `LLAMA_MAX_NEW_TOKENS` | `900` | answer budget; too small truncates the JSON |
+| `ROMAN_URDU_MODEL_PATH` | `models/roman-model/t5-stage2-c` | trained T5 translator |
+| `ROMAN_URDU_NUM_BEAMS` | `4` | beam search used for measured quality |
+| `ROMAN_URDU_MAX_NEW_TOKENS` | `160` | translation output budget |
 
 ---
 

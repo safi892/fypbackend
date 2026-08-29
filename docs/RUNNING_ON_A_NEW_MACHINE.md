@@ -1,9 +1,9 @@
 # Running the backend on a new machine
 
-Everything the API needs lives in this project except two things it cannot
-carry: the model weights (940 MB, too large for git) and `llama.cpp` (a native
-binary). This page covers both, and the readiness probe tells you if either is
-missing rather than leaving you to guess from a failed request.
+Everything the API needs lives in this project except the ignored model weights
+and `llama.cpp` (a native binary). This page covers both, and the readiness
+probe tells you if the Qwen server is missing rather than leaving you to guess
+from a failed request.
 
 ## 1. Python environment
 
@@ -30,10 +30,12 @@ Check it: `llama-server --version`
 ## 3. The model file
 
 Not in git — `models/` is ignored, so a clone will not have it. Get
-`qwen-cpp-review-q4_k_m.gguf` from whoever set the project up and put it here:
+the Qwen GGUF and Roman Urdu T5 model from whoever set the project up and put
+them here:
 
 ```
 models/gguf/qwen-cpp-review-q4_k_m.gguf
+models/roman-model/t5-stage2-c/
 ```
 
 Three builds exist, all producing the same answers:
@@ -47,6 +49,13 @@ Three builds exist, all producing the same answers:
 Measured on CPU. Anchor validity is 100% on all three; the smallest loses one
 concept out of sixteen against the unquantised build, which is why it is the
 default. Set `LLAMA_MODEL_PATH` to use a different one.
+
+The Roman Urdu model is used when `/analyze` receives
+`"output_language": "roman_urdu"`. The default path is
+`models/roman-model/t5-stage2-c`, overrideable with `ROMAN_URDU_MODEL_PATH`.
+If it is missing, the backend falls back to the older frame translator.
+Only the final inference files are needed there; do not copy `checkpoint-*` or
+trainer state into the backend.
 
 ## 4. Configuration
 

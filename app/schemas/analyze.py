@@ -1,10 +1,10 @@
-"""Request/response schemas for ``POST /analyze`` (extended, backward safe).
+"""Request/response schemas for ``POST /analyze``.
 
-Problem solved: the original mobile client only knew ``input_code``,
-``commented_code`` and ``explanation``. Every new field is **additive**
-(optional response fields, optional request fields) so the old client keeps
-working while new clients can opt into static analysis, suggestions,
-documentation, change analysis and translation.
+Problem solved: the public mobile response stays small — ``input_code``,
+``commented_code``, ``explanation`` and ``needs_review`` — while the router can
+still carry internal static analysis, suggestions, documentation, change
+analysis, translation metadata and anchors through the pipeline before FastAPI
+filters the response.
 
 Why pydantic: gives us free validation (e.g. ``code`` must be non-empty) and a
 single source of truth for the JSON contract shared by router + frontend.
@@ -130,14 +130,14 @@ class ChangeAnalysis(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    """Combined analysis response. Core 3 fields are kept first & unchanged."""
+    """Combined analysis result; ``/analyze`` exposes only the display fields."""
 
-    # --- Existing fields (kept first & unchanged for mobile compatibility) ---
+    # --- Public display fields ---
     input_code: str
     commented_code: str
     explanation: str
 
-    # --- New additive fields (Phases 3-11) ---
+    # --- Internal fields (computed, but filtered from public /analyze) ---
     analysis: StaticAnalysis | None = None
     suggestions: list[str] = Field(default_factory=list)
     documentation: list[DocEntry] = Field(default_factory=list)
