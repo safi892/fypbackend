@@ -1,43 +1,75 @@
 """Translation task (Phase 10) — English -> Roman Urdu.
 
 Problem solved: when a client requests Roman Urdu, the generated English text
-must be translated. This service owns that single NLP task. The current
-implementation is a dictionary/phrase fallback; a trained translation model can
-later replace ``to_roman_urdu`` without changing callers.
+must be translated. This service owns that single NLP task, and a trained
+model can later replace ``to_roman_urdu`` without changing callers.
 
-Why a phrase dictionary (not a full MT model): the generated suggestions use a
-small, predictable vocabulary, so a targeted substitution is fast, offline and
-good enough until a real model is trained.
+Why sentence frames rather than the phrase dictionary this started as: Urdu
+puts the verb last and English puts it in the middle, so replacing words where
+they stand yields Urdu vocabulary in English order — "ye function calculate
+karta hai the sum" — which is a sentence in neither language. Adding more
+words makes it worse, not better. A frame matches a whole English pattern and
+emits a whole Urdu sentence, so the order comes from the Urdu side.
+
+Why untranslated lines are returned in English: measured on the corpus, a
+frame carries 29.9% of ``Purpose:`` lines and about half the rest are
+multi-clause prose no single frame can hold. Half-translated output is harder
+to read than English, so a line either translates properly or not at all —
+the same choice made for unverifiable optimisations and unanchored comments.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Mapping, Sequence
+from functools import lru_cache
+from pathlib import Path
+from typing import Protocol
+
+from app.core.config import (
+    ROMAN_URDU_MAX_NEW_TOKENS,
+    ROMAN_URDU_MODEL_PATH,
+    ROMAN_URDU_NUM_BEAMS,
+)
+from app.model_processing.frames import translate_block
+from app.model_processing.masking import translate_protecting_code
 
 ROMAN_URDU = "roman_urdu"
 ENGLISH = "english"
+PREFIX = "translate English to Roman Urdu: "
+_SERVING = re.compile(r"⟦(\d+)⟧")
+_SENTINEL = re.compile(r"<extra_id_(\d+)>")
+_SERVING_PLACEHOLDER = re.compile(r"⟦\d+⟧")
 
-_PHRASES = {
-    "this function": "ye function",
-    "the function": "ye function",
-    "calculates": "calculate karta hai",
-    "returns": "return karta hai",
-    "recursively": "recursive tareeqe se",
-    "the code": "ye code",
-    "consider": "ghaur karein",
-    "detected": "detect hua hai",
-    "found": "mila hai",
-    "add": "add karein",
-    "comments": "comments",
-    "documentation": "documentation",
-    "function": "function",
-    "loops": "loops",
-    "nested": "nested",
-    "complexity": "complexity",
-    "reduce": "kam karein",
-    "split": "todein",
-    "into smaller": "chote hisson mein",
-}
+
+class _ModelUnavailable(RuntimeError):
+    """Raised when Roman Urdu falls back to the frame translator."""
+
+
+class _Tokenizer(Protocol):
+    def __call__(self, text: str, **kwargs: object) -> Mapping[str, object]: ...
+
+    def decode(self, token_ids: object, **kwargs: object) -> str: ...
+
+
+class _Seq2SeqModel(Protocol):
+    def eval(self) -> object: ...
+
+    def generate(self, *args: object, **kwargs: object) -> Sequence[object]: ...
+
+
+def _to_sentinel(text: str) -> str:
+    return _SERVING.sub(lambda match: f"<extra_id_{int(match.group(1))}>", text)
+
+
+def _to_serving(text: str) -> str:
+    return _SENTINEL.sub(lambda match: f"⟦{int(match.group(1))}⟧", text)
+
+
+def _space_placeholders(text: str) -> str:
+    """Keep restored code from sticking to translated words."""
+    text = re.sub(rf"(?<=[A-Za-z0-9:;,.])(?={_SERVING_PLACEHOLDER.pattern})", " ", text)
+    return re.sub(rf"({_SERVING_PLACEHOLDER.pattern})(?=[A-Za-z])", r"\1 ", text)
 
 
 def is_roman_urdu(output_language: str | None) -> bool:
@@ -52,24 +84,120 @@ def is_roman_urdu(output_language: str | None) -> bool:
     return (output_language or ENGLISH).strip().lower() == ROMAN_URDU
 
 
+@lru_cache(maxsize=1)
+def _load_model() -> tuple[_Tokenizer, _Seq2SeqModel] | None:
+    """Load the backend-local Roman Urdu model, if it exists.
+
+    Problem solved: the backend should be self-contained. Why lazy loading:
+    most requests ask for English, and loading a 231 MB T5 on startup would
+    slow every deployment for an optional response field.
+
+    :return: tokenizer/model pair, or ``None`` when the local model is absent.
+    """
+    path = Path(ROMAN_URDU_MODEL_PATH)
+    if not path.is_dir():
+        return None
+
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(str(path))
+    model = AutoModelForSeq2SeqLM.from_pretrained(str(path))
+    model.eval()
+    return tokenizer, model
+
+
+def _translate_line_with_model(tokenizer: _Tokenizer, model: _Seq2SeqModel, line: str) -> str:
+    """Translate one masked line with the T5 model."""
+    import torch
+
+    encoded = tokenizer(PREFIX + _to_sentinel(line), return_tensors="pt", truncation=True)
+    with torch.no_grad():
+        output = model.generate(
+            **encoded,
+            max_new_tokens=ROMAN_URDU_MAX_NEW_TOKENS,
+            num_beams=ROMAN_URDU_NUM_BEAMS,
+        )
+    raw = tokenizer.decode(output[0], skip_special_tokens=False)
+    for token in ("<pad>", "</s>"):
+        raw = raw.replace(token, "")
+    return _space_placeholders(_to_serving(raw.strip()))
+
+
+def _translate_with_model(text: str) -> str | None:
+    """Translate text with the trained model, preserving line boundaries."""
+    loaded = _load_model()
+    if loaded is None:
+        return None
+    tokenizer, model = loaded
+    return "\n".join(
+        _translate_line_with_model(tokenizer, model, line) if line.strip() else line
+        for line in text.splitlines()
+    )
+
+
+def _translate_lines_protecting_code(text: str, translate: Callable[[str], str]) -> str:
+    """Translate each line separately so one unsafe line cannot poison a block."""
+    pieces = []
+    for segment in text.splitlines(keepends=True):
+        body = segment.rstrip("\r\n")
+        line_ending = segment[len(body):]
+        if not body.strip():
+            pieces.append(segment)
+            continue
+        pieces.append(translate_protecting_code(body, translate).text + line_ending)
+    return "".join(pieces)
+
+
 def to_roman_urdu(text: str) -> str:
-    """Translate English text to Roman Urdu via phrase substitution.
+    """Translate English text to Roman Urdu, protecting the code inside it.
 
     Problem solved: provide an offline Roman Urdu rendering of generated text.
-    Why sort phrases by length (longest first): longer phrases ("into smaller")
-    must be matched before their shorter sub-phrases ("smaller") to avoid
-    partial, wrong replacements.
+
+    Why the masking: these explanations are *about* code and therefore contain
+    code. ``arr[j]`` is not English and has to survive verbatim, but anything
+    that rewrites text will eventually rewrite it, and a comment that no longer
+    names the variable it describes is worse than untranslated English. Code
+    fragments are hidden before translation and checked back in afterwards; if
+    any did not return intact, the English is kept.
 
     :param text: the English text to translate.
-    :return: the best-effort Roman Urdu translation.
+    :return: the Roman Urdu translation, or the input when code did not survive.
     """
     if not text:
         return text
 
-    result = text
-    for english, roman in sorted(_PHRASES.items(), key=lambda kv: len(kv[0]), reverse=True):
-        result = re.sub(rf"\b{re.escape(english)}\b", roman, result, flags=re.IGNORECASE)
-    return result
+    try:
+        def model_translate(masked: str) -> str:
+            translated = _translate_with_model(masked)
+            if translated is None:
+                raise _ModelUnavailable
+            return translated
+
+        return _translate_lines_protecting_code(text, model_translate)
+    except _ModelUnavailable:
+        pass
+    except Exception:
+        pass
+
+    def frame(masked: str) -> str:
+        translated, _matched, _total = translate_block(masked)
+        return translated
+
+    return _translate_lines_protecting_code(text, frame)
+
+
+def coverage(text: str) -> tuple[int, int]:
+    """How many of ``text``'s lines a frame could carry.
+
+    Exposed because "translated" and "partly translated" are different things
+    to be told, and because this is the number that says when a trained model
+    has become worth the corpus it needs.
+
+    :param text: the English text.
+    :return: ``(lines translated, lines attempted)``.
+    """
+    _translated, matched, total = translate_block(text)
+    return matched, total
 
 
 def translate(text: str, output_language: str | None) -> str | None:

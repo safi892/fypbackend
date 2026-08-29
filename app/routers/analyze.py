@@ -1,8 +1,8 @@
 """``/analyze`` endpoint — orchestrates the full hybrid review pipeline.
 
 Problem solved: a single request must fan out to static analysis, the shared AI
-model, and the per-task services, then combine everything into one backward
--compatible response. This router wires those stages together in order.
+model, and the per-task services, then combine everything into one response.
+This router wires those stages together in order.
 
 Why orchestrate here (not in the services): keeps each service focused on one
 task and makes the pipeline order explicit and easy to follow/test.
@@ -10,6 +10,7 @@ task and makes the pipeline order explicit and easy to follow/test.
 
 from fastapi import APIRouter, Header, HTTPException, Query
 
+from app.model_processing.anchors import Anchor, render_commented_code
 from app.model_processing.syntax_check import check_cpp_syntax
 from app.schemas.analyze import (
     AnalyzeRequest,
@@ -37,7 +38,34 @@ from app.services.history_service import list_history, record_history
 router = APIRouter()
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
+def _anchor_from_item(item: dict[str, object]) -> Anchor:
+    """Build a checked anchor from the model's normalized line-comment dict."""
+    line = item.get("line")
+    if not isinstance(line, int):
+        line = int(str(line))
+    return Anchor(
+        line=line,
+        code=str(item.get("code", "")),
+        comment=str(item.get("comment", "")),
+    )
+
+
+def _translated_line_comments(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Translate anchor comments without touching their line or quoted code."""
+    translated = []
+    for item in items:
+        translated.append({
+            **item,
+            "comment": translation_service.to_roman_urdu(str(item.get("comment", ""))),
+        })
+    return translated
+
+
+@router.post(
+    "/analyze",
+    response_model=AnalyzeResponse,
+    response_model_include={"input_code", "commented_code", "explanation", "needs_review"},
+)
 def analyze(
     payload: AnalyzeRequest,
     authorization: str | None = Header(default=None),
@@ -45,20 +73,19 @@ def analyze(
     """Run the full code-review pipeline and persist history.
 
     Problem solved: this is the one entry point the mobile client calls. Why
-    additive pipeline: static analysis (fast) feeds the response and the
-    rule-based services, the model feeds the comment/explanation tasks, and
-    optional stages (diff, translation) only run when requested — so old
-    clients and new clients both work.
+    staged pipeline: static analysis (fast) feeds the internal rule-based
+    services, the model feeds the comment/explanation tasks, and optional
+    stages (diff, translation) only run when requested.
 
     :param payload: the validated analysis request.
     :param authorization: bearer token header (may be ``None`` -> 401).
-    :return: the combined ``AnalyzeResponse`` with core 3 fields + new ones.
+    :return: the combined result, filtered by FastAPI to the public fields.
     :raises HTTPException: 401 if unauthenticated, 503 if the model cannot load.
     """
     user = require_user(authorization)
 
-    # Phase 3 — deterministic static analysis (cheap; feeds the response and
-    # the rule-based services below, never a model prompt).
+    # Phase 3 — deterministic static analysis (cheap; feeds the rule-based
+    # services below, never a model prompt).
     analysis = static_analyze(payload.code, language=payload.language)
 
     # Shared AI backend (CodeT5): a single inference returning raw sections.
@@ -102,8 +129,16 @@ def analyze(
 
     # Phase 10 — only when Roman Urdu was requested.
     translation = None
+    line_comment_items = raw.line_comments
     if translation_service.is_roman_urdu(payload.output_language):
-        translation = translation_service.to_roman_urdu(explanation)
+        explanation = translation_service.to_roman_urdu(explanation)
+        translation = explanation
+        if raw.verified and raw.line_comments:
+            line_comment_items = _translated_line_comments(raw.line_comments)
+            commented_code = render_commented_code(
+                payload.code,
+                [_anchor_from_item(item) for item in line_comment_items],
+            )
 
     response = AnalyzeResponse(
         input_code=payload.code.strip(),
@@ -114,7 +149,7 @@ def analyze(
         documentation=documentation,
         change_analysis=change_analysis,
         translation=translation,
-        line_comments=[LineComment(**item) for item in raw.line_comments],
+        line_comments=[LineComment(**item) for item in line_comment_items],
         anchor_stats=AnchorStats(**raw.anchor_stats) if raw.anchor_stats else None,
         verified_comments=raw.verified,
         needs_review=needs_review,

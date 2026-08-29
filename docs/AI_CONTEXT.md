@@ -27,6 +27,19 @@ Recently switched from a fine-tuned CodeT5 to a fine-tuned Qwen2.5-Coder-1.5B
 machine) or "qwen_gguf" (current). The API talks to llama-server over HTTP on
 port 8081; the API itself owns 8080.
 
+Roman Urdu now also uses a backend-local model:
+models/roman-model/t5-stage2-c. translation_service loads it lazily when
+output_language=roman_urdu; if it is missing or errors, the older frame
+translator is used. Placeholders are still masked/restored and unsafe
+translations fall back to English.
+
+For /analyze, output_language defaults to english. With roman_urdu, the main
+explanation is Roman Urdu and commented_code is rebuilt from the user's
+original C++ with Roman Urdu comments appended. The public response is trimmed
+to input_code, commented_code, explanation and needs_review; internal analysis,
+line_comments and anchor_stats are computed but not returned. Time and space
+complexity are stripped from the public explanation.
+
   ./run_model_server.sh --bg    # llama.cpp, loads models/gguf/*.gguf
   ./runserver.sh                # the API
   curl localhost:8080/ready     # says what is missing if anything is
@@ -87,9 +100,10 @@ CONSTRAINTS
   (four of them exercise the model end to end, so llama-server must be
    running or they fail with a 503)
 - models/ is gitignored; the 940 MB GGUF is shared out of band
-- The response contract is additive only. input_code, commented_code and
-  explanation come first and must not change shape - an Android client depends
-  on them.
+- The /analyze public response is intentionally small: input_code,
+  commented_code, explanation and needs_review only. Keep internal/debug fields
+  out unless the Android client contract changes. The public explanation should
+  not include time or space complexity.
 
 The training repo is a separate project at /Volumes/Data/fyp8th_clean (dataset
 building, QLoRA training, evaluation, GGUF conversion). Only touch it if the

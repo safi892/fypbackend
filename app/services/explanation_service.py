@@ -10,10 +10,36 @@ Why a dedicated service: a later explanation model can be swapped in behind
 
 from __future__ import annotations
 
+import re
+
 from app.model_processing.explanation_rules import (
     generate_rule_based_explanation,
     has_meaningful_explanation,
 )
+
+_COMPLEXITY_LINE = re.compile(
+    r"(?im)^\s*(?:time\s+complexity|space\s+complexity|complexity)\s*:\s*.*(?:\r?\n|$)"
+)
+_COMPLEXITY_SENTENCE = re.compile(
+    r"(?i)(?:^|(?<=[.!?])\s+)[^.\n]*"
+    r"(?:time\s+complexity|space\s+complexity|complexity)[^.\n]*"
+    r"O\([^)\n]+\)[^.\n]*[.!?]?"
+)
+_TRAILING_COMPLEXITY_CLAUSE = re.compile(
+    r"(?i),?\s*(?:resulting in|leading to|giving|with)\s+[^.\n]*"
+    r"(?:O\([^)\n]+\)[^.\n]*(?:time|space|complexity)|"
+    r"(?:time|space|complexity)[^.\n]*O\([^)\n]+\))[^.\n]*"
+)
+
+
+def _without_complexity_details(explanation: str) -> str:
+    """Remove time/space-cost prose from the public explanation."""
+    cleaned = _COMPLEXITY_LINE.sub("", explanation)
+    cleaned = _TRAILING_COMPLEXITY_CLAUSE.sub("", cleaned)
+    cleaned = _COMPLEXITY_SENTENCE.sub("", cleaned)
+    cleaned = re.sub(r"\s+([.,;:])", r"\1", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
 def generate(code: str, raw_explanation: str = "") -> str:
@@ -33,7 +59,7 @@ def generate(code: str, raw_explanation: str = "") -> str:
     if not has_meaningful_explanation(explanation):
         explanation = generate_rule_based_explanation(code.strip())
 
-    return explanation
+    return _without_complexity_details(explanation)
 
 
 _GENERIC_EXPLANATION_MARKERS = (

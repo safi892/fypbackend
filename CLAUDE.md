@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A FastAPI backend that reviews C++ for an Android client. `POST /analyze` returns commented code, an explanation and deterministic static analysis; `POST /optimize` returns a faster rewrite that has been compiled and executed against the original. Auth and history live in SQLite.
+A FastAPI backend that reviews C++ for an Android client. `POST /analyze` publicly returns only the submitted code, commented code, explanation and `needs_review`; `POST /optimize` returns a faster rewrite that has been compiled and executed against the original. Auth and history live in SQLite.
 
 Model training lives in a **separate project** at `/Volumes/Data/fyp8th_clean` (dataset, QLoRA training, evaluation, GGUF conversion). Only go there if the task is about training or the model itself — this repo is endpoints, schemas, auth, history and serving.
 
@@ -49,6 +49,18 @@ Tests need no model — the HTTP call is stubbed everywhere except `test_analyze
 - `codet5` — legacy, in-process seq2seq, **the code default** so existing deployments keep their behaviour. The checkpoint is no longer on this machine.
 
 When llama-server is down the Qwen path falls back to CodeT5 rather than erroring, so a mobile client gets a degraded answer. If the fallback also fails, the *llama-server* error is what surfaces — "checkpoint not found" would name something the operator never chose.
+
+**Roman Urdu is backend-local now.** `translation_service.to_roman_urdu` first
+loads `models/roman-model/t5-stage2-c` (override with `ROMAN_URDU_MODEL_PATH`),
+the trained 61M-param T5 from the training repo. If it is missing or errors, the
+old frame translator still answers. Code placeholders are masked and restored
+around the model; if a placeholder is dropped, the English is returned rather
+than unsafe Roman Urdu. For `/analyze`, `output_language=roman_urdu` translates
+the main `explanation` and the comments appended in `commented_code`; code
+fields stay as submitted. The public response is trimmed to `input_code`,
+`commented_code`, `explanation`, and `needs_review`; internal analysis,
+line comments and anchor stats are still computed but not returned. Time and
+space complexity are stripped from the public explanation.
 
 **The `/analyze` pipeline** ([app/routers/analyze.py](app/routers/analyze.py)) is the orchestrator; services stay single-purpose:
 
@@ -97,7 +109,7 @@ Sessions reliably try to tidy these away. Don't.
 
 ## Constraints
 
-- **The response contract is additive only.** `input_code`, `commented_code`, `explanation` come first and must not change shape — an Android client depends on them. New fields are optional.
+- **The `/analyze` public response is intentionally small.** It returns only `input_code`, `commented_code`, `explanation`, and `needs_review`. Keep internal/debug fields out of that response unless the Android client is updated with the change.
 - Python 3.11 (torch 2.0.1 has no 3.12/3.13 wheels), `numpy<2` (torch 2.0.1 ABI). Both pins are load-bearing and documented in `pyproject.toml`.
 - ruff enforces `ANN` (annotations required) at line length 100; mypy runs strict.
 - Not in git: `models/` (the GGUF is shared out of band), `.env`, `app.db`, `logs/`.
