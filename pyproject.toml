@@ -11,11 +11,24 @@ requires-python = ">=3.11,<3.13"
 
 dependencies = [
     # --- Web layer ---------------------------------------------------------
-    "fastapi[standard]>=0.135.2",   # tested with 0.135.2
-    # Redundant on paper - fastapi[standard] already requires uvicorn[standard]
-    # - but `runserver.sh` launches `python -m uvicorn` by name, and a tool you
-    # invoke directly should not arrive as somebody else's transitive dep.
-    "uvicorn[standard]>=0.42.0",    # tested with 0.42.0
+    # Plain `fastapi`, not `fastapi[standard]`. That extra adds eight packages
+    # for features this API does not have: jinja2 (no templates), 
+    # python-multipart (no uploads or form posts), email-validator + dnspython
+    # (no EmailStr - auth validates its own), pydantic-settings and
+    # pydantic-extra-types (unused), and fastapi-cli, which drags in typer,
+    # rich, shellingham, rignore, fastapi-cloud-cli and **sentry-sdk**. Nothing
+    # runs `fastapi run`; `runserver.sh` calls `python -m uvicorn` directly. A
+    # telemetry SDK that is never initialised is still a telemetry SDK shipped.
+    "fastapi>=0.135.2",             # tested with 0.135.2
+    # Plain `uvicorn` too. The [standard] extra is uvloop (13.6 MB), httptools,
+    # websockets, watchfiles and python-dotenv. This app opens no websockets, no
+    # run path passes --reload, and `app.core.config._load_dotenv` is the
+    # project's own KEY=VALUE reader by deliberate choice - its docstring says a
+    # full dotenv library is overkill. uvloop and httptools are pure event-loop
+    # speed, and the request this serves spends seconds inside a 1.5B model, so
+    # they optimise a rounding error. Add `[standard]` back if any of that
+    # changes; nothing in the code has to move.
+    "uvicorn>=0.42.0",              # tested with 0.42.0
     # Imported directly by every schema in app/schemas/, and was never declared:
     # it was arriving through fastapi. That works until fastapi changes its
     # bounds, at which point the break is in code that does not mention fastapi.
