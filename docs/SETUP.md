@@ -19,7 +19,7 @@ request.
 
 | Component | Version | Why | Required |
 | --- | --- | --- | --- |
-| Python | **3.11** | 3.13 is excluded: torch 2.0.1 has no wheels for it | yes |
+| Python | **3.11** | 3.13 is excluded: torch 2.0.1 has no wheels, for the `codet5` extra | yes |
 | llama.cpp | any recent | serves the Qwen model over HTTP | for `qwen_gguf` |
 | GGUF weights | 0.92 GB | not in git, shared separately | for `qwen_gguf` |
 | Roman Urdu model | 0.23 GB | translates generated prose when requested | for `output_language=roman_urdu` |
@@ -62,21 +62,29 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e . && pip install pytest httpx ruff mypy
 ```
 
-Pinned versions and the reason for each pin are in `pyproject.toml`. Two are
-load-bearing:
+`uv sync` installs the web layer and the C++ parsers and nothing else — about
+90 packages. The `qwen_gguf` backend needs no Python packages at all: it talks
+to llama-server with `urllib` and `json`.
+
+The in-process model backends are an opt-in extra, roughly 2 GB of wheels:
+
+```bash
+uv sync --extra codet5
+```
+
+Install it if you set `MODEL_BACKEND=codet5`, or if you want the Roman Urdu
+field answered by the trained T5 rather than by the rule-based sentence frames.
+Without it the app still imports and every test still passes; a request that
+reaches the CodeT5 engine returns **503** with a message naming the extra.
+
+Two pins inside that extra are load-bearing:
 
 - **`torch==2.0.1`** — newer versions change seq2seq beam search, which alters
   the CodeT5 output.
 - **`numpy<2`** — torch 2.0.1 was built against the NumPy 1.x ABI. NumPy 2
   installs cleanly and then fails at runtime when converting tensors, which is
-  a slow way to find out.
-
-If you use the notebooks under `notebooks/`, add their kernel — `uv sync`
-removes anything not declared, so without this Jupyter stops working:
-
-```bash
-uv sync --extra notebooks
-```
+  a slow way to find out. It is pinned beside torch rather than at the top
+  level, because torch is the only reason for it.
 
 Verify:
 
