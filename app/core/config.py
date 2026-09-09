@@ -123,7 +123,14 @@ DEBUG_MODEL = os.getenv("DEBUG_MODEL", "0") == "1"
 # undone. The mobile contract is identical either way: the adapter renders the
 # new model's line-anchored output into the ``commented_code`` string the app
 # already expects.
-MODEL_BACKEND = os.getenv("MODEL_BACKEND", "codet5")
+#
+# The default is ``qwen_gguf``. It used to be ``codet5``, which had become the
+# wrong default twice over: the CodeT5 checkpoint is not in the repository, and
+# torch and transformers are now the opt-in ``codet5`` extra, so the default
+# path asked for a model nobody has and libraries nobody installed. The Qwen
+# weights *are* here, under ``models/gguf``. Setting MODEL_BACKEND=codet5 still
+# selects the old engine; it just no longer happens by accident.
+MODEL_BACKEND = os.getenv("MODEL_BACKEND", "qwen_gguf")
 
 # Where llama-server is listening. The server is started outside the app: it
 # loads a multi-gigabyte model once and outlives any single worker, which is
@@ -136,9 +143,14 @@ LLAMA_SERVER_URL = os.getenv("LLAMA_SERVER_URL", "http://127.0.0.1:8081")
 # The GGUF weights, inside the project so a checkout is all a teammate needs.
 # Resolved from BASE_DIR rather than the working directory, so the path holds
 # wherever the server is launched from.
+#
+# ``-v3`` is part of the filename, not decoration. Five checkpoints were trained
+# and v3 is the one that ships: v4 and v5 were each measured against it on one
+# machine and neither moved (p = 0.58 and p = 1.00). The un-suffixed name this
+# default used to carry belonged to the first run.
 LLAMA_MODEL_PATH = os.getenv(
     "LLAMA_MODEL_PATH",
-    str(BASE_DIR / "models" / "gguf" / "qwen-cpp-review-q4_k_m.gguf"),
+    str(BASE_DIR / "models" / "gguf" / "qwen-cpp-review-v3-q4_k_m.gguf"),
 )
 # Threads for llama-server. 0 lets it choose.
 LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "8"))

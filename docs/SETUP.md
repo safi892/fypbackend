@@ -124,7 +124,7 @@ llama-server --version
 whoever set the project up and put it here:
 
 ```
-models/gguf/qwen-cpp-review-q4_k_m.gguf
+models/gguf/qwen-cpp-review-v3-q4_k_m.gguf
 ```
 
 Verify:
@@ -139,7 +139,7 @@ build, which is why it is the default.
 
 | file | size | speed (CPU) |
 | --- | ---: | ---: |
-| `qwen-cpp-review-q4_k_m.gguf` | 0.92 GB | ~18 tok/s |
+| `qwen-cpp-review-v3-q4_k_m.gguf` | 0.92 GB | ~18 tok/s |
 | `qwen-cpp-review-q8_0.gguf` | 1.5 GB | ~13 tok/s |
 | `qwen-cpp-review-f16.gguf` | 2.9 GB | ~8 tok/s |
 
@@ -200,15 +200,18 @@ MODEL_BACKEND=qwen_gguf
 LLAMA_SERVER_URL=http://127.0.0.1:8081
 ```
 
-`MODEL_BACKEND` defaults to `codet5`, so an existing deployment keeps its old
-behaviour until it opts in. Every other setting has a working default; the ones
-worth knowing:
+`MODEL_BACKEND` defaults to `qwen_gguf`. It used to default to `codet5` so an
+existing deployment kept its old behaviour, but that stopped being the kind
+default: the CodeT5 checkpoint is not in the repository and its libraries are
+now the opt-in `codet5` extra, so the default asked for a model nobody has and
+packages nobody installed. Set `MODEL_BACKEND=codet5` to select the old engine
+deliberately. Every other setting has a working default; the ones worth knowing:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MODEL_BACKEND` | `codet5` | `codet5` or `qwen_gguf` |
+| `MODEL_BACKEND` | `qwen_gguf` | `qwen_gguf` or `codet5` (needs `--extra codet5`) |
 | `LLAMA_SERVER_URL` | `http://127.0.0.1:8081` | where llama-server listens |
-| `LLAMA_MODEL_PATH` | `models/gguf/qwen-cpp-review-q4_k_m.gguf` | which build to serve |
+| `LLAMA_MODEL_PATH` | `models/gguf/qwen-cpp-review-v3-q4_k_m.gguf` | which build to serve |
 | `LLAMA_THREADS` | `8` | set to your CPU core count |
 | `LLAMA_CHUNK_TOKENS` | `300` | how large a piece of a file the model sees at once |
 | `LLAMA_MAX_NEW_TOKENS` | `900` | answer budget; too small truncates the JSON |
@@ -252,7 +255,7 @@ curl -s localhost:8080/ready | python3 -m json.tool
   "ready": true,
   "backend": "qwen_gguf",
   "checks": {
-    "model_file":   { "ok": true, "detail": "qwen-cpp-review-q4_k_m.gguf (0.92 GB)" },
+    "model_file":   { "ok": true, "detail": "qwen-cpp-review-v3-q4_k_m.gguf (0.92 GB)" },
     "llama_server": { "ok": true, "detail": "ready at http://127.0.0.1:8081" },
     "cpp_compiler": { "ok": true, "detail": "/usr/bin/c++", "required": false }
   },

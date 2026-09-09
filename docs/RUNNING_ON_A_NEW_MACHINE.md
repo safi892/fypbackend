@@ -34,7 +34,7 @@ the Qwen GGUF and Roman Urdu T5 model from whoever set the project up and put
 them here:
 
 ```
-models/gguf/qwen-cpp-review-q4_k_m.gguf
+models/gguf/qwen-cpp-review-v3-q4_k_m.gguf
 models/roman-model/t5-stage2-c/
 ```
 
@@ -42,7 +42,7 @@ Three builds exist, all producing the same answers:
 
 | file | size | speed | when to use |
 | --- | ---: | ---: | --- |
-| `qwen-cpp-review-q4_k_m.gguf` | 0.92 GB | ~18 tok/s | **default** |
+| `qwen-cpp-review-v3-q4_k_m.gguf` | 0.92 GB | ~18 tok/s | **default** |
 | `qwen-cpp-review-q8_0.gguf` | 1.5 GB | ~13 tok/s | if you have RAM to spare |
 | `qwen-cpp-review-f16.gguf` | 2.9 GB | ~8 tok/s | reference, unquantised |
 
@@ -66,8 +66,9 @@ MODEL_BACKEND=qwen_gguf
 LLAMA_SERVER_URL=http://127.0.0.1:8081
 ```
 
-`MODEL_BACKEND` defaults to `codet5`, the original engine, so an existing
-deployment keeps working until it opts in. `qwen_gguf` selects the new one.
+`MODEL_BACKEND` defaults to `qwen_gguf`, which is what the weights in
+`models/gguf/` are for. `codet5` selects the original in-process engine and
+needs both its checkpoint and `uv sync --extra codet5`; neither ships here.
 
 ## 5. Start both processes
 
@@ -90,7 +91,7 @@ curl -s localhost:8080/ready | python3 -m json.tool
   "ready": true,
   "backend": "qwen_gguf",
   "checks": {
-    "model_file":   { "ok": true, "detail": "qwen-cpp-review-q4_k_m.gguf (0.92 GB)" },
+    "model_file":   { "ok": true, "detail": "qwen-cpp-review-v3-q4_k_m.gguf (0.92 GB)" },
     "llama_server": { "ok": true, "detail": "ready at http://127.0.0.1:8081" },
     "cpp_compiler": { "ok": true, "detail": "/usr/bin/c++", "required": false }
   },
