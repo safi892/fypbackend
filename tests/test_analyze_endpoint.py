@@ -8,6 +8,8 @@ comment/explanation quality (run with ``pytest -s``).
 
 from __future__ import annotations
 
+import pytest
+
 from app.schemas.analyze import AnalyzeResponse
 from app.services import model_service, translation_service
 
@@ -191,6 +193,9 @@ def test_print_model_output_for_manual_review(
     response = client.post(
         "/analyze", json={"code": SAMPLE_CODE}, headers=auth_headers
     )
+    if response.status_code != 200:
+        reason = response.json().get("detail", response.text)
+        pytest.skip(f"real model backend unavailable: {reason}")
     data = AnalyzeResponse(**response.json())
     with capsys.disabled():
         print("\n\n===== MODEL OUTPUT (binarySearch) =====")

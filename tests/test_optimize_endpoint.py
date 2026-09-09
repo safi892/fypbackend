@@ -68,22 +68,23 @@ def test_a_rejected_rewrite_returns_the_users_own_code(
     assert "rejected" in body["note"]
 
 
-def test_an_unverifiable_rewrite_is_marked_rather_than_claimed(
+def test_an_unverifiable_rewrite_returns_the_users_own_code(
     client: TestClient, auth_headers: dict[str, str], monkeypatch
 ):
-    """Some shapes cannot be driven automatically; say so instead of implying proof."""
+    """Some shapes cannot be driven automatically; keep the caller's code."""
     monkeypatch.setattr(
         optimization_service,
         "optimize_checked",
         lambda code: OptimizationResult(
-            code=FASTER, changed=True, verified=False,
+            code=code, changed=False, verified=False,
             note="not verified: cannot generate a caller for fib(...) automatically",
         ),
     )
 
     body = client.post("/optimize", json={"code": NAIVE}, headers=auth_headers).json()
 
-    assert body["changed"] is True
+    assert body["code"] == NAIVE
+    assert body["changed"] is False
     assert body["verified"] is False, "an unchecked rewrite must not look checked"
 
 

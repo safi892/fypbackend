@@ -164,6 +164,22 @@ def test_an_unavailable_model_server_returns_the_original(monkeypatch):
     assert not result.changed and result.code == NAIVE
 
 
+def test_an_unverifiable_rewrite_never_reaches_the_caller(monkeypatch):
+    monkeypatch.setattr(optimization_service, "MODEL_BACKEND", "qwen_gguf")
+    from app.services import qwen_service
+
+    original = "void go(int n) { int total = n + 1; }"
+    proposal = "void go(int n) { int total = n; }"
+    monkeypatch.setattr(qwen_service, "optimize", lambda code: proposal)
+
+    result = optimization_service.optimize_checked(original)
+
+    assert not result.changed
+    assert not result.verified
+    assert result.code == original
+    assert "not verified" in result.note
+
+
 def test_the_string_api_still_returns_something_compilable(monkeypatch):
     """``optimize`` predates this work and callers still expect a plain string."""
     monkeypatch.setattr(optimization_service, "MODEL_BACKEND", "qwen_gguf")

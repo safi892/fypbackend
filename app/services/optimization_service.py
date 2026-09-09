@@ -130,9 +130,11 @@ def optimize_checked(code: str) -> OptimizationResult:
             note=verdict.summary(),
         )
     if not verdict.verified:
-        # Could not be checked here - offer it, but say so rather than imply it
-        # was proven.
-        return OptimizationResult(code=proposal, changed=True, note=verdict.summary())
+        LOGGER.warning(
+            "optimizer: rewrite not returned because it was not verified (%s)",
+            verdict.summary(),
+        )
+        return OptimizationResult(code=code, note=verdict.summary())
 
     LOGGER.warning("optimizer: rewrite rejected (%s)", verdict.summary())
     return OptimizationResult(code=code, note=verdict.summary())
