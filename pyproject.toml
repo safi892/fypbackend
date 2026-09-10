@@ -3,14 +3,36 @@ name = "fyp-cpp-code-review-backend"
 version = "0.2.0"
 description = "Hybrid C++ code-review backend (FastAPI): deterministic static analysis + AI generation, backward compatible with the existing mobile client."
 readme = "README.md"
-# 3.11 is what this is developed and tested on. 3.12 is untested here mainly
-# because torch 2.0.1, which the CodeT5 backend needs, has no 3.12 wheels.
+# 3.11 is what this is developed and tested on. The upper bound is only for the
+# optional `codet5` extra: torch 2.0.1 has no 3.12 wheels. The core install now
+# needs no ML packages, so it would run on newer Python - the bound stays
+# because nothing here has been tested there, not because anything forbids it.
 requires-python = ">=3.11,<3.13"
 
 dependencies = [
     # --- Web layer ---------------------------------------------------------
-    "fastapi[standard]>=0.135.2",   # tested with 0.135.2
-    "uvicorn[standard]>=0.42.0",    # tested with 0.42.0
+    # Plain `fastapi`, not `fastapi[standard]`. That extra adds eight packages
+    # for features this API does not have: jinja2 (no templates), 
+    # python-multipart (no uploads or form posts), email-validator + dnspython
+    # (no EmailStr - auth validates its own), pydantic-settings and
+    # pydantic-extra-types (unused), and fastapi-cli, which drags in typer,
+    # rich, shellingham, rignore, fastapi-cloud-cli and **sentry-sdk**. Nothing
+    # runs `fastapi run`; `runserver.sh` calls `python -m uvicorn` directly. A
+    # telemetry SDK that is never initialised is still a telemetry SDK shipped.
+    "fastapi>=0.135.2",             # tested with 0.135.2
+    # Plain `uvicorn` too. The [standard] extra is uvloop (13.6 MB), httptools,
+    # websockets, watchfiles and python-dotenv. This app opens no websockets, no
+    # run path passes --reload, and `app.core.config._load_dotenv` is the
+    # project's own KEY=VALUE reader by deliberate choice - its docstring says a
+    # full dotenv library is overkill. uvloop and httptools are pure event-loop
+    # speed, and the request this serves spends seconds inside a 1.5B model, so
+    # they optimise a rounding error. Add `[standard]` back if any of that
+    # changes; nothing in the code has to move.
+    "uvicorn>=0.42.0",              # tested with 0.42.0
+    # Imported directly by every schema in app/schemas/, and was never declared:
+    # it was arriving through fastapi. That works until fastapi changes its
+    # bounds, at which point the break is in code that does not mention fastapi.
+    "pydantic>=2.0",                # tested with 2.12.4
 
     # --- C++ parsing -------------------------------------------------------
     # Used by the static analyzer and by the chunker that splits a file into
@@ -19,22 +41,11 @@ dependencies = [
     # between minor releases.
     "tree-sitter>=0.23,<0.26",      # tested with 0.25.2
     "tree-sitter-cpp>=0.23,<0.24",  # tested with 0.23.4
-
-    # --- CodeT5 backend (MODEL_BACKEND=codet5) -----------------------------
-    # Only this engine loads a model in-process. The Qwen backend talks to
-    # llama-server over HTTP and needs none of the four below, so a deployment
-    # that has settled on qwen_gguf can drop them and save about 2 GB.
-    # They stay required for now because model_service imports torch at module
-    # level; making them optional means making that import lazy first.
-    "torch==2.0.1",                 # pinned: newer torch changes seq2seq beam search
-    "transformers==4.46.2",         # pinned: must match the CodeT5 checkpoint
-    "sentencepiece>=0.2.1",         # tested with 0.2.1 - CodeT5 tokenizer
-    "huggingface_hub>=0.23.1",      # tested with 0.36.2 - checkpoint resolution
-    "protobuf>=7.34.1",             # tested with 7.34.1 - required by sentencepiece
-    # torch 2.0.1 was built against the NumPy 1.x ABI; NumPy 2 breaks tensor
-    # conversion at runtime rather than at install time.
-    "numpy<2",                      # tested with 1.26.4
 ]
+
+# The Qwen backend needs no Python packages of its own: it uses urllib and json
+# from the standard library. What it does need is outside pip - see
+# docs/SETUP.md for llama.cpp and the model weights.
 
 [dependency-groups]
 dev = [
@@ -49,14 +60,39 @@ dev = [
 # docs/SETUP.md for llama.cpp and the model weights.
 
 [project.optional-dependencies]
-# The notebooks under notebooks/ need a kernel. Declared here because `uv sync`
-# prunes anything not listed, and finding out by having Jupyter stop working is
-# an unpleasant way to learn that. Install with: uv sync --extra notebooks
-notebooks = [
-    "ipykernel>=6.29",
-    "jupyter>=1.0",
+# In-process model backends. Neither is needed to run the service: the default
+# request path is MODEL_BACKEND=qwen_gguf over HTTP, and the Roman Urdu field
+# falls back to the rule-based sentence frames when the T5 is absent. About
+# 2 GB of wheels, so it is opt-in:
+#
+#     uv sync --extra codet5
+#
+# `model_service` and `translation_service` import all of this inside the
+# functions that use it, and `_import_ml` turns a missing install into the
+# RuntimeError the router already renders as a 503. So the app imports, and the
+# test suite runs, with none of it present.
+codet5 = [
+    # torch 2.0.1: newer torch changes seq2seq beam search, and the CodeT5
+    # numbers in test_results.md were measured on this one.
+    "torch==2.0.1",
+    "transformers==4.46.2",         # pinned: must match the CodeT5 checkpoint
+    "sentencepiece>=0.2.1",         # tested with 0.2.1 - T5/CodeT5 tokenizer
+    # Needed by transformers to convert a slow SentencePiece tokenizer when a
+    # checkpoint ships spiece.model without tokenizer.json. It is NOT a
+    # sentencepiece dependency - sentencepiece declares none - which is what
+    # this line used to claim.
+    "protobuf>=7.34.1",             # tested with 7.34.1
+    # Only here because torch 2.0.1 was built against the NumPy 1.x ABI; NumPy 2
+    # breaks tensor conversion at runtime rather than at install time. It is not
+    # a constraint the rest of the project has, which is why it sits beside the
+    # torch pin that causes it rather than in the core dependency list.
+    "numpy<2",                      # tested with 1.26.4
 ]
 
+# huggingface_hub and the other transformers dependencies are deliberately not
+# listed: transformers already requires huggingface-hub<1.0,>=0.23.2, numpy,
+# tokenizers, safetensors and regex. Declaring them again pins two things to one
+# fact and lets them drift.
 
 # --- Linting & formatting (enforces a single clean code style) -------------
 [tool.ruff]

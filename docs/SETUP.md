@@ -19,7 +19,7 @@ request.
 
 | Component | Version | Why | Required |
 | --- | --- | --- | --- |
-| Python | **3.11** | 3.13 is excluded: torch 2.0.1 has no wheels for it | yes |
+| Python | **3.11** | 3.13 is excluded: torch 2.0.1 has no wheels, for the `codet5` extra | yes |
 | llama.cpp | any recent | serves the Qwen model over HTTP | for `qwen_gguf` |
 | GGUF weights | 0.92 GB | not in git, shared separately | for `qwen_gguf` |
 | Roman Urdu model | 0.23 GB | translates generated prose when requested | for `output_language=roman_urdu` |
@@ -62,21 +62,29 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e . && pip install pytest httpx ruff mypy
 ```
 
-Pinned versions and the reason for each pin are in `pyproject.toml`. Two are
-load-bearing:
+`uv sync` installs the web layer and the C++ parsers and nothing else — about
+90 packages. The `qwen_gguf` backend needs no Python packages at all: it talks
+to llama-server with `urllib` and `json`.
+
+The in-process model backends are an opt-in extra, roughly 2 GB of wheels:
+
+```bash
+uv sync --extra codet5
+```
+
+Install it if you set `MODEL_BACKEND=codet5`, or if you want the Roman Urdu
+field answered by the trained T5 rather than by the rule-based sentence frames.
+Without it the app still imports and every test still passes; a request that
+reaches the CodeT5 engine returns **503** with a message naming the extra.
+
+Two pins inside that extra are load-bearing:
 
 - **`torch==2.0.1`** — newer versions change seq2seq beam search, which alters
   the CodeT5 output.
 - **`numpy<2`** — torch 2.0.1 was built against the NumPy 1.x ABI. NumPy 2
   installs cleanly and then fails at runtime when converting tensors, which is
-  a slow way to find out.
-
-If you use the notebooks under `notebooks/`, add their kernel — `uv sync`
-removes anything not declared, so without this Jupyter stops working:
-
-```bash
-uv sync --extra notebooks
-```
+  a slow way to find out. It is pinned beside torch rather than at the top
+  level, because torch is the only reason for it.
 
 Verify:
 
@@ -116,7 +124,7 @@ llama-server --version
 whoever set the project up and put it here:
 
 ```
-models/gguf/qwen-cpp-review-q4_k_m.gguf
+models/gguf/qwen-cpp-review-v3-q4_k_m.gguf
 ```
 
 Verify:
@@ -131,7 +139,7 @@ build, which is why it is the default.
 
 | file | size | speed (CPU) |
 | --- | ---: | ---: |
-| `qwen-cpp-review-q4_k_m.gguf` | 0.92 GB | ~18 tok/s |
+| `qwen-cpp-review-v3-q4_k_m.gguf` | 0.92 GB | ~18 tok/s |
 | `qwen-cpp-review-q8_0.gguf` | 1.5 GB | ~13 tok/s |
 | `qwen-cpp-review-f16.gguf` | 2.9 GB | ~8 tok/s |
 
@@ -192,15 +200,18 @@ MODEL_BACKEND=qwen_gguf
 LLAMA_SERVER_URL=http://127.0.0.1:8081
 ```
 
-`MODEL_BACKEND` defaults to `codet5`, so an existing deployment keeps its old
-behaviour until it opts in. Every other setting has a working default; the ones
-worth knowing:
+`MODEL_BACKEND` defaults to `qwen_gguf`. It used to default to `codet5` so an
+existing deployment kept its old behaviour, but that stopped being the kind
+default: the CodeT5 checkpoint is not in the repository and its libraries are
+now the opt-in `codet5` extra, so the default asked for a model nobody has and
+packages nobody installed. Set `MODEL_BACKEND=codet5` to select the old engine
+deliberately. Every other setting has a working default; the ones worth knowing:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MODEL_BACKEND` | `codet5` | `codet5` or `qwen_gguf` |
+| `MODEL_BACKEND` | `qwen_gguf` | `qwen_gguf` or `codet5` (needs `--extra codet5`) |
 | `LLAMA_SERVER_URL` | `http://127.0.0.1:8081` | where llama-server listens |
-| `LLAMA_MODEL_PATH` | `models/gguf/qwen-cpp-review-q4_k_m.gguf` | which build to serve |
+| `LLAMA_MODEL_PATH` | `models/gguf/qwen-cpp-review-v3-q4_k_m.gguf` | which build to serve |
 | `LLAMA_THREADS` | `8` | set to your CPU core count |
 | `LLAMA_CHUNK_TOKENS` | `300` | how large a piece of a file the model sees at once |
 | `LLAMA_MAX_NEW_TOKENS` | `900` | answer budget; too small truncates the JSON |
@@ -244,7 +255,7 @@ curl -s localhost:8080/ready | python3 -m json.tool
   "ready": true,
   "backend": "qwen_gguf",
   "checks": {
-    "model_file":   { "ok": true, "detail": "qwen-cpp-review-q4_k_m.gguf (0.92 GB)" },
+    "model_file":   { "ok": true, "detail": "qwen-cpp-review-v3-q4_k_m.gguf (0.92 GB)" },
     "llama_server": { "ok": true, "detail": "ready at http://127.0.0.1:8081" },
     "cpp_compiler": { "ok": true, "detail": "/usr/bin/c++", "required": false }
   },

@@ -89,11 +89,15 @@ OTHER THINGS THAT LOOK ODD BUT ARE DELIBERATE
   needs 4.57, and this backend must stay independently deployable.
 - /health is a cheap liveness probe the load balancer polls. /ready is the one
   that talks to the model server. Do not merge them.
-- torch and transformers (~2 GB) are only needed by the legacy CodeT5 path.
-  They are still required because model_service imports torch at module level.
+- torch and transformers (~2 GB) are only needed by the legacy CodeT5 path and
+  by the in-process Roman Urdu T5. Both import them inside the functions that
+  use them, so they are an optional extra: `uv sync --extra codet5`. A missing
+  install surfaces as the RuntimeError the router renders as a 503, not as an
+  ImportError at startup.
 
 CONSTRAINTS
-- Python 3.11 (torch 2.0.1 has no 3.13 wheels), numpy<2 (torch 2.0.1 ABI)
+- Python 3.11 and numpy<2 are both torch 2.0.1's constraints, and apply only
+  when the `codet5` extra is installed
 - ruff with ANN rules: type annotations are enforced, line length 100
 - mypy strict
 - 90 tests, all passing: .venv/bin/python -m pytest -q

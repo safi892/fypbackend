@@ -16,7 +16,7 @@ Model training lives in a **separate project** at `/Volumes/Data/fyp8th_clean` (
 
 ```bash
 uv sync                                    # deps (or: pip install -e .)
-uv sync --extra notebooks                  # add the Jupyter kernel; uv prunes it otherwise
+uv sync --extra codet5                     # +2 GB: in-process CodeT5 and Roman Urdu T5
 
 ./run_model_server.sh --bg                 # llama.cpp on 8081; --status / --stop
 ./runserver.sh                             # the API; start|stop|restart|status|logs
@@ -103,14 +103,14 @@ Sessions reliably try to tidy these away. Don't.
 
 - **~150 lines duplicated from the training repo** (anchoring, chunking). That repo pins `transformers` 4.57, this one pins 4.46, and this backend must stay independently deployable.
 - **`/health` and `/ready` are both present.** `/health` is the cheap liveness probe a load balancer polls; `/ready` touches disk and the inference server. Merging them makes the probe expensive.
-- **torch + transformers (~2 GB) with nothing in the current path using them.** Only the legacy CodeT5 engine needs them, and they stay required because `model_service` imports torch at module level. Making them optional means making that import lazy first.
+- **torch + transformers (~2 GB) are now an optional extra**, `uv sync --extra codet5`. Only the legacy CodeT5 engine and the in-process Roman Urdu T5 use them, both import them inside the functions that need them, and `model_service._import_ml` turns a missing install into the RuntimeError the router already renders as a 503. The core install is ~90 packages; `qwen_gguf` needs no Python packages of its own.
 - **Files are chunked before being sent.** The checkpoint saw ~15-line functions; a whole file fits neither its context nor its training distribution. Chunks are line ranges so mapping answers back to file coordinates is exact, and anchors are repaired *inside the chunk* before being shifted — a bare `return 0;` searched file-wide would attach to the wrong function.
 - **`/optimize` returns the user's original code on failure.** A rewrite is compiled beside the original, both are run on generated inputs, and it is discarded unless outputs agree. `changed` and `verified` say which case happened; a `verified: false` rewrite is one the driver could not call, not one that failed.
 
 ## Constraints
 
 - **The `/analyze` public response is intentionally small.** It returns only `input_code`, `commented_code`, `explanation`, and `needs_review`. Keep internal/debug fields out of that response unless the Android client is updated with the change.
-- Python 3.11 (torch 2.0.1 has no 3.12/3.13 wheels), `numpy<2` (torch 2.0.1 ABI). Both pins are load-bearing and documented in `pyproject.toml`.
+- Python 3.11 (torch 2.0.1 has no 3.12/3.13 wheels) and `numpy<2` (torch 2.0.1 ABI) are both consequences of the torch pin, so they bind only when the `codet5` extra is installed. Documented in `pyproject.toml`.
 - ruff enforces `ANN` (annotations required) at line length 100; mypy runs strict.
 - Not in git: `models/` (the GGUF is shared out of band), `.env`, `app.db`, `logs/`.
 

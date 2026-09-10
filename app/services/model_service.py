@@ -18,9 +18,7 @@ import re
 import threading
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-
-import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from typing import TYPE_CHECKING, Any
 
 from app.core.config import (
     FALLBACK_TOKENIZER_PATH,
@@ -38,6 +36,17 @@ from app.core.config import (
     TORCH_THREADS,
     USE_MPS,
 )
+
+# torch and transformers are imported inside the functions that use them, not
+# here. Why: `MODEL_BACKEND=qwen_gguf` talks to llama-server over HTTP and needs
+# neither, so a deployment that has settled on it should not have to install
+# ~2 GB of ML wheels to import the app. A module-level `import torch` made that
+# impossible - removing torch from pyproject.toml stopped `app.main` importing
+# and took all 106 tests down with it. `from __future__ import annotations` is
+# already on, so every annotation below is a string and costs nothing at import.
+if TYPE_CHECKING:  # pragma: no cover - for type checkers only
+    import torch
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from app.model_processing.code_formatting import clean_duplicate_code
 from app.schemas.analyze import StaticAnalysis
 
@@ -147,6 +156,36 @@ def _parse_sections(output: str) -> RawModelOutput:
     return RawModelOutput(commented_code=commented_code, explanation=explanation)
 
 
+def _import_ml() -> tuple[Any, Any, Any]:
+    """Import torch and transformers, or say clearly that they are absent.
+
+    Problem solved: `MODEL_BACKEND=codet5` needs ~2 GB of ML wheels that a
+    qwen_gguf deployment has no reason to install. When they are missing the
+    operator must be told which backend they chose and what to do about it.
+
+    Why RuntimeError rather than letting ImportError through: every caller of
+    this module already treats FileNotFoundError and RuntimeError as "this
+    engine is unavailable" - the router turns them into a 503 and the qwen
+    path falls back on them. ModuleNotFoundError is an ImportError, so it
+    matched neither and surfaced as a 500 with a stack trace.
+
+    :return: the ``(torch, AutoModelForSeq2SeqLM, AutoTokenizer)`` triple.
+    :raises RuntimeError: if the CodeT5 dependencies are not installed.
+    """
+    try:
+        import torch
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+    except ImportError as exc:
+        message = (
+            "MODEL_BACKEND=codet5 needs torch and transformers, which are not "
+            "installed. Install them with `uv sync --extra codet5`, or set "
+            "MODEL_BACKEND=qwen_gguf to use the llama-server backend, which "
+            f"needs no ML packages. Missing: {exc.name}"
+        )
+        raise RuntimeError(message) from exc
+    return torch, AutoModelForSeq2SeqLM, AutoTokenizer
+
+
 def _generate_output(
     tokenizer: AutoTokenizer,
     model: AutoModelForSeq2SeqLM,
@@ -167,6 +206,8 @@ def _generate_output(
     :param generation_kwargs: beam/length options forwarded to ``generate``.
     :return: the decoded output string.
     """
+    import torch
+
     inputs = tokenizer(
         text,
         return_tensors="pt",
@@ -193,6 +234,8 @@ def _configure_threads() -> int:
 
     :return: the number of threads torch will use.
     """
+    import torch
+
     if TORCH_THREADS > 0:
         threads = TORCH_THREADS
     else:
@@ -212,6 +255,8 @@ def _select_device() -> torch.device:
 
     :return: the torch device to run the model on.
     """
+    import torch
+
     if torch.cuda.is_available():
         return torch.device("cuda")
     if USE_MPS and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -246,6 +291,8 @@ def _load_tokenizer_fallback(original_exc: Exception) -> AutoTokenizer:
     """
     import warnings
 
+    _, _, AutoTokenizer = _import_ml()
+
     warnings.warn(
         f"Tokenizer at {TOKENIZER_PATH} failed to load ({original_exc}); "
         f"falling back to default tokenizer at {FALLBACK_TOKENIZER_PATH}.",
@@ -273,6 +320,8 @@ def _load_model() -> tuple[AutoTokenizer, AutoModelForSeq2SeqLM, torch.device]:
     :raises FileNotFoundError: if the model/tokenizer directory is absent.
     :raises RuntimeError: if the tokenizer/model fails to load.
     """
+    torch, AutoModelForSeq2SeqLM, AutoTokenizer = _import_ml()
+
     global _MODEL_CACHE
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
