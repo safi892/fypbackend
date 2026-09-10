@@ -1,8 +1,8 @@
 """Pytest fixtures for the code-review backend.
 
-Problem solved: the ``/analyze`` endpoint requires a Bearer session token, so
-every integration test needs a registered, logged-in user. This fixture
-registers a fresh user (unique email) and returns ready-to-use auth headers.
+Problem solved: authenticated API tests need a Bearer session token. This
+fixture registers a fresh user (unique email) and returns ready-to-use auth
+headers.
 
 Why a unique email each session: the SQLite DB persists between runs, so a
 fixed email would collide with a previous run's registration (409).

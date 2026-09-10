@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Code Analyzer · Playground</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<!-- THESIS: A C++ reading workspace, with source and understanding side by side.
+OWN-WORLD: Cool white surfaces, graphite source editor, restrained blue actions, system sans.
+STORY: Enter code, choose a response language, analyze, then read the explanation and comments.
+FIRST VIEWPORT: Compact navigation, task heading, a large editor left and a reading panel right.
+FORM: Paired source-and-reading workbench; direction 4; seed 6dd98906.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md -->
+    <a class="skip-link" href="#code">Skip to code editor</a>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Code Analyzer home"><span class="brand-mark" aria-hidden="true">C<span>++</span></span>Code Analyzer</a>
+    <nav aria-label="Main navigation"><span class="nav-current">Playground</span><a href="/docs" target="_blank" rel="noopener">API docs</a></nav>
+    <span class="access-note">No account needed</span>
+  </header>
+  <main>
+    <div class="page-heading"><div><h1>A little code. A clearer picture.</h1><p>Explore what your C++ code does, with explanations you can follow.</p></div><span class="workspace-label">Testing workspace</span></div>
+    <div id="service-notice" class="notice" hidden><span id="service-message"></span><button id="retry-service" class="text-button">Check again</button></div>
+    <div class="workspace">
+      <section class="editor-panel" aria-labelledby="editor-heading">
+        <div class="panel-heading"><div><h2 id="editor-heading">C++ editor</h2><span class="muted">Write a function or start with an example.</span></div><span class="language-tag">C++ only</span></div>
+        <form id="analyze-form">
+          <div class="editor-toolbar"><label class="sr-only" for="example">Load an example</label><select id="example"><option value="">Load an example…</option><option value="starter">C++ starter program</option><option value="search">Binary search</option><option value="sum">Sum an array</option><option value="factorial">Factorial</option></select><button class="text-button" type="button" id="clear">Clear</button></div>
+          <div class="code-editor"><pre id="line-numbers" aria-hidden="true">1</pre><label class="sr-only" for="code">C++ source code</label><textarea id="code" name="code" maxlength="100000" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="editor-help validation-message" placeholder="// Write C++ here, or load a starter program.
+
+int add(int a, int b) {
+    return a + b;
+}" required></textarea></div>
+          <div class="editor-meta"><span id="code-count">0 lines · 0 characters</span><span id="editor-help">C++ only · syntax checked</span></div>
+          <div id="validation-feedback" class="validation-feedback" data-state="empty"><div role="status" aria-live="polite"><strong id="validation-title">Start with C++</strong><p id="validation-message">Write C++ code or load an example. Analyze unlocks when the syntax check passes.</p></div><button id="validation-retry" class="text-button" type="button" hidden>Check again</button><button id="go-to-error" class="text-button" type="button" hidden>Go to error</button></div>
+          <div class="run-controls"><div><label for="output-language">Explanation language</label><select id="output-language"><option value="english">English</option><option value="roman_urdu">Roman Urdu</option></select></div><button id="analyze-button" class="button primary" type="submit" disabled aria-describedby="validation-message">Analyze code <span aria-hidden="true">→</span></button></div>
+          <p class="keyboard-hint">Use <kbd>⌘</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to analyze</p>
+        </form>
+      </section>
+      <section class="results-panel" aria-labelledby="results-heading" aria-busy="false">
+        <div class="panel-heading"><div><h2 id="results-heading">Make sense of your code</h2><span id="result-meta" class="muted">Your analysis will appear here.</span></div><span id="result-badge" class="result-badge" hidden>Complete</span></div>
+        <div id="empty-state" class="empty-state"><div class="empty-symbol" aria-hidden="true">{ <span>…</span> }</div><h3>From code to understanding.</h3><p>Add your C++ code and select <strong>Analyze code</strong>. Get a plain-language explanation and comments alongside your source.</p><div class="output-preview"><span>Explanation</span><span>Commented code</span></div></div>
+        <div id="loading-state" class="loading-state" hidden><div class="loading-label"><span class="spinner" aria-hidden="true"></span><h3>Reading your code…</h3></div><p id="loading-message">The model is preparing your explanation and comments.</p><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton short"></div><p class="muted">Longer snippets can take a few minutes.</p></div>
+        <div id="error-state" class="error-state" role="alert" hidden><h3 id="error-heading">We couldn’t finish the analysis.</h3><p id="error-message"></p><p>Your code is still in the editor. You can try again.</p></div>
+        <div id="result-content" hidden>
+          <p id="stale-notice" class="notice" hidden>The code or language has changed. Analyze again to update these results.</p>
+          <p id="review-notice" class="notice warning" hidden>Review recommended: some generated comments were rejected, or the output did not pass the syntax check. Check the result before using it.</p>
+          <div class="result-section"><div class="section-heading"><h3>Explanation</h3><button id="copy-explanation" class="text-button">Copy</button></div><div id="explanation" class="explanation"></div></div>
+          <div class="result-section"><div class="section-heading"><h3>Commented code</h3><button id="copy-code" class="text-button">Copy code</button></div><pre class="output-code" tabindex="0" aria-label="Commented C++ code"><code id="commented-code"></code></pre></div>
+          <details><summary>View API response</summary><pre id="raw-response" tabindex="0"></pre></details>
+        </div>
+      </section>
+    </div>
+    <footer><span id="service-status" role="status">Checking model availability…</span><span>AI-generated explanations deserve a human read.</span></footer>
+    <p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

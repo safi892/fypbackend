@@ -12,10 +12,13 @@ from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.model_processing.anchors import Anchor, render_commented_code
 from app.model_processing.syntax_check import check_cpp_syntax
+from app.parsers import cpp_parser
 from app.schemas.analyze import (
     AnalyzeRequest,
     AnalyzeResponse,
     AnchorStats,
+    CodeValidationRequest,
+    CodeValidationResponse,
     LineComment,
     OptimizeRequest,
     OptimizeResponse,
@@ -36,6 +39,41 @@ from app.services.auth_service import require_user
 from app.services.history_service import list_history, record_history
 
 router = APIRouter()
+
+
+def _validate_cpp_source(code: str) -> CodeValidationResponse:
+    """Use the same syntax gate for live editor feedback and model requests."""
+    root = cpp_parser.parse(code)
+    if root is None:
+        raise HTTPException(
+            status_code=503,
+            detail="C++ validation is unavailable. Restore the C++ parser and try again.",
+        )
+    if not any(node.type != "comment" for node in root.named_children):
+        return CodeValidationResponse(
+            valid=False, message="Only C++ source code is supported. Add a C++ function or program."
+        )
+    if root.has_error:
+        node = root
+        while not node.is_error and not node.is_missing:
+            child = next((child for child in node.children if child.has_error), None)
+            if child is None:
+                break
+            node = child
+        line = node.start_point.row + 1
+        return CodeValidationResponse(
+            valid=False,
+            message=f"Only C++ source code is supported. Check the syntax near line {line}. "
+            "Finish your statement and check for missing semicolons or brackets.",
+            line=line,
+        )
+    return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
+
+
+@router.post("/validate-code", response_model=CodeValidationResponse)
+def validate_code(payload: CodeValidationRequest) -> CodeValidationResponse:
+    """Check editor input without authentication, inference, execution, or history writes."""
+    return _validate_cpp_source(payload.code)
 
 
 def _anchor_from_item(item: dict[str, object]) -> Anchor:
@@ -70,7 +108,7 @@ def analyze(
     payload: AnalyzeRequest,
     authorization: str | None = Header(default=None),
 ) -> AnalyzeResponse:
-    """Run the full code-review pipeline and persist history.
+    """Run the full code-review pipeline, with optional authenticated history.
 
     Problem solved: this is the one entry point the mobile client calls. Why
     staged pipeline: static analysis (fast) feeds the internal rule-based
@@ -78,11 +116,15 @@ def analyze(
     stages (diff, translation) only run when requested.
 
     :param payload: the validated analysis request.
-    :param authorization: bearer token header (may be ``None`` -> 401).
+    :param authorization: optional bearer token header for saving history.
     :return: the combined result, filtered by FastAPI to the public fields.
-    :raises HTTPException: 401 if unauthenticated, 503 if the model cannot load.
+    :raises HTTPException: 401 if an invalid token is sent, 503 if the model cannot load.
     """
-    user = require_user(authorization)
+    user = require_user(authorization) if authorization else None
+
+    validation = _validate_cpp_source(payload.code)
+    if not validation.valid:
+        raise HTTPException(status_code=422, detail=validation.message)
 
     # Phase 3 — deterministic static analysis (cheap; feeds the rule-based
     # services below, never a model prompt).
@@ -155,13 +197,14 @@ def analyze(
         needs_review=needs_review,
     )
 
-    record_history(
-        user_id=user.id,
-        input_code=response.input_code,
-        commented_code=response.commented_code,
-        explanation=response.explanation,
-        source=payload.source,
-    )
+    if user is not None:
+        record_history(
+            user_id=user.id,
+            input_code=response.input_code,
+            commented_code=response.commented_code,
+            explanation=response.explanation,
+            source=payload.source,
+        )
 
     return response
 

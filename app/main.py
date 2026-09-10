@@ -8,8 +8,12 @@ Why permissive CORS: the existing mobile client and local frontend call this
 API cross-origin; tighten ``allow_origins`` before any public deployment.
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.database import initialize_database
 from app.routers.analyze import router as analyze_router
@@ -17,6 +21,14 @@ from app.routers.auth import router as auth_router
 from app.routers.health import router as ready_router
 
 app = FastAPI(title="Code Analyzer API", version="0.2.0")
+WEB_DIR = Path(__file__).resolve().parent / "web"
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def playground() -> FileResponse:
+    """Serve the browser testing workspace beside the existing API."""
+    return FileResponse(WEB_DIR / "index.html")
 
 app.add_middleware(
     CORSMiddleware,

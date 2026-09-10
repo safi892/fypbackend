@@ -1,8 +1,8 @@
 """Integration tests for ``POST /analyze`` (the core endpoint).
 
-Problem solved: verifies the full pipeline (auth -> static analysis -> model ->
-per-task services -> response) end-to-end and that the mobile-app contract is
-preserved. One test also *prints* the model output so a human can eyeball
+Problem solved: verifies the full pipeline (static analysis -> model ->
+per-task services -> response) end-to-end, plus optional authenticated history.
+One test also *prints* the model output so a human can eyeball
 comment/explanation quality (run with ``pytest -s``).
 """
 
@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.parsers import cpp_parser
+from app.routers import analyze as analyze_router
 from app.schemas.analyze import AnalyzeResponse
 from app.services import model_service, translation_service
 
@@ -58,9 +60,74 @@ def test_analyze_returns_only_display_fields(
     }
 
 
-def test_analyze_requires_auth(client) -> None:
+def test_analyze_allows_guest_without_recording_history(client, monkeypatch) -> None:
+    def fake_model(_code, analysis=None):
+        return model_service.RawModelOutput(
+            commented_code=SAMPLE_CODE,
+            explanation="Purpose: Searches the array.",
+            verified=True,
+        )
+
+    def unexpected_history(**kwargs):
+        pytest.fail("Guest analysis must not write user history")
+
+    monkeypatch.setattr(model_service, "run_model", fake_model)
+    monkeypatch.setattr(analyze_router, "record_history", unexpected_history)
+
     response = client.post("/analyze", json={"code": SAMPLE_CODE})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["explanation"]
+
+
+def test_analyze_rejects_invalid_token(client, monkeypatch) -> None:
+    def unexpected_model(*args, **kwargs):
+        pytest.fail("Invalid sessions must never reach model inference")
+
+    monkeypatch.setattr(model_service, "run_model", unexpected_model)
+    response = client.post(
+        "/analyze",
+        json={"code": SAMPLE_CODE},
+        headers={"Authorization": "Bearer invalid-token"},
+    )
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "def add(a, b):\n    return a + b",
+        "const add = (a, b) => a + b;",
+        "public class Main { public static void main(String[] args) {} }",
+        "print('hello')",
+        "Please explain how binary search works",
+        "   \n\t",
+        "// Only a comment\n/* No source code */",
+        "int broken( {",
+    ],
+)
+def test_non_cpp_input_is_rejected_before_inference(client, auth_headers, monkeypatch, code):
+    def unexpected_model(*args, **kwargs):
+        pytest.fail("Invalid source must never reach model inference")
+
+    monkeypatch.setattr(model_service, "run_model", unexpected_model)
+    response = client.post("/analyze", json={"code": code}, headers=auth_headers)
+    assert response.status_code == 422
+    assert "Only C++ source code" in response.json()["detail"]
+
+
+def test_analyze_rejects_other_language_selection(client, auth_headers):
+    response = client.post(
+        "/analyze", json={"code": SAMPLE_CODE, "language": "python"}, headers=auth_headers
+    )
+    assert response.status_code == 422
+
+
+def test_cpp_validation_fails_closed_when_parser_is_unavailable(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(cpp_parser, "parse", lambda code: None)
+    response = client.post("/analyze", json={"code": SAMPLE_CODE}, headers=auth_headers)
+    assert response.status_code == 503
+    assert "C++ validation is unavailable" in response.json()["detail"]
 
 
 def test_analyze_with_old_code_triggers_change_analysis(
@@ -85,6 +152,31 @@ def test_analyze_with_old_code_triggers_change_analysis(
     )
     assert response.status_code == 200, response.text
     assert "change_analysis" not in response.json()
+
+
+def test_analyze_records_history_for_authenticated_users(
+    client, auth_headers: dict[str, str], monkeypatch
+) -> None:
+    def fake_model(_code, analysis=None):
+        return model_service.RawModelOutput(
+            commented_code=SAMPLE_CODE,
+            explanation="Purpose: Searches the array.",
+            verified=True,
+        )
+
+    monkeypatch.setattr(model_service, "run_model", fake_model)
+
+    response = client.post(
+        "/analyze",
+        json={"code": SAMPLE_CODE, "source": "test"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+
+    history = client.get("/analyze/history", headers=auth_headers)
+    assert history.status_code == 200, history.text
+    assert history.json()["total"] >= 1
+    assert history.json()["items"][0]["source"] == "test"
 
 
 def test_analyze_roman_urdu_translation(
