@@ -11,6 +11,7 @@ task and makes the pipeline order explicit and easy to follow/test.
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.model_processing.anchors import Anchor, render_commented_code
+from app.model_processing.statement_comments import detect_suspicious_logic
 from app.model_processing.syntax_check import check_cpp_syntax
 from app.parsers import cpp_parser
 from app.schemas.analyze import (
@@ -54,6 +55,11 @@ def _validate_cpp_source(code: str) -> CodeValidationResponse:
             valid=False, message="Only C++ source code is supported. Add a C++ function or program."
         )
     if root.has_error:
+        wrapped = f"void __snippet__() {{\n{code}\n}}"
+        wrapped_root = cpp_parser.parse(wrapped)
+        if wrapped_root is not None and not wrapped_root.has_error:
+            return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
+
         node = root
         while not node.is_error and not node.is_missing:
             child = next((child for child in node.children if child.has_error), None)
@@ -85,6 +91,7 @@ def _anchor_from_item(item: dict[str, object]) -> Anchor:
         line=line,
         code=str(item.get("code", "")),
         comment=str(item.get("comment", "")),
+        placement=str(item.get("placement", "inline")),
     )
 
 
@@ -102,7 +109,13 @@ def _translated_line_comments(items: list[dict[str, object]]) -> list[dict[str, 
 @router.post(
     "/analyze",
     response_model=AnalyzeResponse,
-    response_model_include={"input_code", "commented_code", "explanation", "needs_review"},
+    response_model_include={
+        "input_code",
+        "commented_code",
+        "explanation",
+        "needs_review",
+        "review_reasons",
+    },
 )
 def analyze(
     payload: AnalyzeRequest,
@@ -162,7 +175,19 @@ def analyze(
     # drifting on this input, and what survived deserves a second look.
     stats = raw.anchor_stats or {}
     discarded = stats.get("dropped", 0) + stats.get("rejected_semantic", 0)
-    needs_review = (not syntax_ok and not raw.verified) or discarded > 0
+
+    review_reasons: list[str] = []
+    suspicious = detect_suspicious_logic(payload.code)
+    if suspicious:
+        review_reasons.extend(suspicious)
+    if not syntax_ok and not raw.verified:
+        review_reasons.append("C++ syntax check failed on generated code.")
+    if discarded > 0:
+        review_reasons.append(
+            f"{discarded} comment anchor(s) were dropped or refuted by syntax rules."
+        )
+
+    needs_review = len(review_reasons) > 0
 
     # Phase 4 — only when the client sent a previous version.
     change_analysis = None
@@ -195,6 +220,7 @@ def analyze(
         anchor_stats=AnchorStats(**raw.anchor_stats) if raw.anchor_stats else None,
         verified_comments=raw.verified,
         needs_review=needs_review,
+        review_reasons=review_reasons,
     )
 
     if user is not None:

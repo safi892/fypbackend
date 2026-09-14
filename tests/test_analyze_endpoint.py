@@ -57,6 +57,7 @@ def test_analyze_returns_only_display_fields(
         "commented_code",
         "explanation",
         "needs_review",
+        "review_reasons",
     }
 
 

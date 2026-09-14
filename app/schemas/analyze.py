@@ -98,6 +98,7 @@ class LineComment(BaseModel):
     line: int = Field(..., ge=1, description="1-based line number in the submitted code")
     code: str = Field(..., description="That line, exactly as submitted")
     comment: str = Field(..., description="What the model says about it")
+    placement: str = Field("inline", description="Placement of comment: inline or before")
 
 
 class AnchorStats(BaseModel):
@@ -168,7 +169,11 @@ class AnalyzeResponse(BaseModel):
     needs_review: bool = Field(
         False,
         description="True when the generated commented code failed the C++ "
-        "syntax gate and should be checked by a human before being trusted.",
+        "syntax gate, dropped anchors, or suspicious code patterns were detected.",
+    )
+    review_reasons: list[str] = Field(
+        default_factory=list,
+        description="Specific reasons why human review is advised.",
     )
 
 

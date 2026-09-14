@@ -215,36 +215,71 @@ async function runAnalysis() {
   }
 }
 
-for (const [button, field] of [['copy-explanation', 'explanation'], ['copy-code', 'commented_code']]) {
-  $(button).addEventListener('click', async () => {
-    if (!result) return;
-    const label = $(button).textContent;
+async function copyToClipboard(text) {
+  if (!text) return false;
+  // 1. Try modern Async Clipboard API first (supported in secure contexts)
+  if (navigator.clipboard && window.isSecureContext) {
     try {
-      await navigator.clipboard.writeText(result[field]);
-      $(button).textContent = 'Copied!';
-      $('announcement').textContent = 'Copied to clipboard.';
+      await navigator.clipboard.writeText(text);
+      return true;
     } catch {
-      $('announcement').textContent = 'Clipboard unavailable. Select the result text to copy it manually.';
-      $(button).textContent = 'Select text to copy';
+      // Fall through to textarea execCommand fallback
     }
-    setTimeout(() => { $(button).textContent = label; }, 2500);
+  }
+  // 2. Fallback for non-secure contexts (e.g. LAN IPs), older browsers, and WebViews
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '0';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    textarea.setAttribute('readonly', '');
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const success = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return success;
+  } catch {
+    return false;
+  }
+}
+
+function bindCopyButton(buttonId, getTextFn, defaultLabel) {
+  const button = $(buttonId);
+  if (!button) return;
+
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    const text = getTextFn();
+    if (!text) return;
+
+    const success = await copyToClipboard(text);
+    if (success) {
+      button.classList.remove('copy-failed');
+      button.classList.add('copied');
+      button.textContent = '✓ Copied!';
+      $('announcement').textContent = 'Copied to clipboard.';
+    } else {
+      button.classList.remove('copied');
+      button.classList.add('copy-failed');
+      button.textContent = 'Copy failed';
+      $('announcement').textContent = 'Clipboard unavailable. Select text manually.';
+    }
+
+    setTimeout(() => {
+      button.classList.remove('copied', 'copy-failed');
+      button.textContent = defaultLabel;
+    }, 2200);
   });
 }
 
-$('copy-api-response').addEventListener('click', async () => {
-  if (!result) return;
-  const button = $('copy-api-response');
-  const label = button.textContent;
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
-    button.textContent = 'Copied!';
-    $('announcement').textContent = 'API response copied to clipboard.';
-  } catch {
-    $('announcement').textContent = 'Clipboard unavailable. Select the response text to copy it manually.';
-    button.textContent = 'Select text to copy';
-  }
-  setTimeout(() => { button.textContent = label; }, 2500);
-});
+bindCopyButton('copy-explanation', () => result?.explanation || $('explanation').textContent, 'Copy');
+bindCopyButton('copy-code', () => result?.commented_code || $('commented-code').textContent, 'Copy code');
+bindCopyButton('copy-api-response', () => (result ? JSON.stringify(result, null, 2) : $('raw-response').textContent), 'Copy');
+
 
 async function checkService() {
   $('retry-service').disabled = true;

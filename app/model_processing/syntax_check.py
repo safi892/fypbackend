@@ -53,13 +53,36 @@ def _extract_code_region(text: str) -> str:
     return "\n".join(code_lines).strip()
 
 
+import os
+import shutil
+
+
+def _find_cxx_compiler() -> str:
+    """Locate an available C++ compiler executable.
+
+    Problem solved: hardcoding 'gcc' fails on environments where only clang++ or
+    c++ is present, and gcc defaults to older standards unless explicit standard
+    flags are supplied. We prioritize CXX environment variable, then standard
+    tools (c++, g++, clang++), falling back to 'gcc'.
+
+    :return: compiler executable name or path.
+    """
+    env_cxx = os.getenv("CXX")
+    if env_cxx and shutil.which(env_cxx):
+        return env_cxx
+    for candidate in ("c++", "g++", "clang++", "gcc"):
+        if shutil.which(candidate):
+            return candidate
+    return "gcc"
+
+
 def check_cpp_syntax(code: str) -> tuple[bool, str | None]:
-    """Type-check C++ source with ``gcc -fsyntax-only``.
+    """Type-check C++ source with ``c++ -fsyntax-only -std=c++17``.
 
     Problem solved: a single boolean gate the router can use to mark output that
     the compiler rejects as needing human review. Why return the error snippet:
-    the caller may log it for debugging. Why tolerate a missing compiler: if gcc
-    is unavailable we refuse to fail-closed (we do not block valid output).
+    the caller may log it for debugging. Why tolerate a missing compiler: if no
+    compiler is available we refuse to fail-closed (we do not block valid output).
 
     :param code: the C++ source to check (may contain prose -- it is stripped).
     :return: ``(ok, error)`` where ``ok`` is True when it compiles and ``error``
@@ -72,7 +95,7 @@ def check_cpp_syntax(code: str) -> tuple[bool, str | None]:
 
     source = _STD_PREAMBLE + region
 
-    gcc = "gcc"
+    compiler = _find_cxx_compiler()
     try:
         with tempfile.NamedTemporaryFile(
             "w", suffix=".cpp", delete=False
@@ -81,7 +104,7 @@ def check_cpp_syntax(code: str) -> tuple[bool, str | None]:
             path = handle.name
         try:
             result = subprocess.run(
-                [gcc, "-fsyntax-only", "-x", "c++", path],
+                [compiler, "-fsyntax-only", "-std=c++17", "-x", "c++", path],
                 capture_output=True,
                 text=True,
                 timeout=_GCC_TIMEOUT_SECONDS,

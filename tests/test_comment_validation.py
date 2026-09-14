@@ -101,6 +101,56 @@ def test_recursion_through_a_local_lambda_counts_as_recursion():
     assert kept.rejected == 0
 
 
+# --- rule: a claim of branching where no conditional exists ------------------- #
+
+
+def test_a_branch_claim_in_a_function_without_conditionals_is_rejected():
+    report = validate(
+        NO_LOOP,
+        [anchor(3, "int total = a + b;", "checks whether a is greater than b")],
+    )
+
+    assert report.rejected == 1
+    assert report.rejections[0].rule == "condition"
+
+
+# --- rule: line-level statement mismatches ------------------------------------- #
+
+
+def test_a_loop_header_claim_on_a_variable_declaration_is_rejected():
+    code = (
+        "void bubbleSort(int arr[], int n) {\n"
+        "  for (int i = 0; i < n - 1; i++) {\n"
+        "    int temp = arr[i];\n"
+        "  }\n"
+        "}"
+    )
+    report = validate(
+        code,
+        [anchor(3, "int temp = arr[i];", "Outer loop: each pass places largest element")],
+    )
+
+    assert report.rejected == 1
+    assert report.rejections[0].rule == "statement"
+
+
+def test_a_loop_action_claim_on_return_statement_is_rejected():
+    code = (
+        "int search(int arr[], int n) {\n"
+        "  for (int i = 0; i < n; i++) if (arr[i] == 0) return i;\n"
+        "  return -1;\n"
+        "}"
+    )
+    report = validate(
+        code,
+        [anchor(3, "return -1;", "Iterates over the array until target is found")],
+    )
+
+    assert report.rejected == 1
+    assert report.rejections[0].rule == "statement"
+
+
+
 # --- rule: a name cited as code that the function never mentions --------------- #
 
 

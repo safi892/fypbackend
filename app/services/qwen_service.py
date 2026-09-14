@@ -35,6 +35,7 @@ from app.core.config import (
 )
 from app.model_processing.anchors import Anchor, AnchorReport, render_commented_code, repair_anchors
 from app.model_processing.comment_validation import validate as validate_comments
+from app.model_processing.statement_comments import CoutStatement, process_statement_comments
 from app.parsers.cpp_chunking import Chunk, chunk_code
 
 LOGGER = logging.getLogger(__name__)
@@ -50,7 +51,13 @@ TASK_INSTRUCTIONS = {
     "line_comments": (
         'Line-by-line comments (array of {"line", "code", "comment"} objects, where "line" is '
         'the 1-based line number and "code" is that line copied verbatim from the input. Never '
-        "reformat or rewrite the code, and only comment lines that carry meaning)"
+        "reformat or rewrite the code, and only comment lines that carry meaning. Treat complete "
+        "C++ statements as single units of meaning regardless of multiline formatting. For multiline "
+        "statements (such as chained cout stream insertions), provide a single unified comment on the "
+        "first line; do not fragment comments across continuation lines. Every cout statement containing "
+        "non-trivial expressions like arithmetic, comparisons, logical conditions, ternaries, calls, or "
+        "updates must receive a comment explaining its calculations, operator precedence, outputs, and "
+        "stream flushing)"
     ),
     "explanation": "Explanation",
     "optimize": (
@@ -61,23 +68,12 @@ TASK_INSTRUCTIONS = {
     ),
 }
 
-#: Appended to the describing tasks. The corpus is entirely working code, so
-#: the trained instruction asks what a function does on the assumption it does
-#: something sensible - and measured on eight deliberately broken programs, the
-#: model described four of them as working, in one case calling an unguarded
-#: ``(low + high) / 2`` a midpoint computed "to avoid overflow".
-#:
-#: This is adopted as a default rather than claimed as an improvement. The
-#: probe behind it (``probe_defects.py`` in the training repository) moved
-#: 3 of 23 problems named to 5, and 4 false descriptions to 3 - one sample out
-#: of eight, which is not an effect worth defending. What it did establish is
-#: that the wording costs nothing: zero invented defects across four correct
-#: programs, and 187 of 187 anchors still valid. Free and slightly in the right
-#: direction is worth having; a measured result it is not.
+#: Appended to the describing tasks.
 DESCRIBE_EFFECTS = (
-    "This code may contain defects. Do not assume it is correct. Describe what each line "
-    "actually does when executed, and where a line's effect differs from what the surrounding "
-    "code appears intended to achieve, say so plainly."
+    "This code may contain defects. Do not assume it is correct. Describe what each statement "
+    "and line actually does when executed, and where a line's effect differs from what the surrounding "
+    "code appears intended to achieve, say so plainly. If calculations involve suspicious values "
+    "such as discounts exceeding 100% or produce negative results, explain that outcome explicitly."
 )
 
 #: Only the tasks the probe covered. ``optimize`` is left alone: it was never
@@ -223,6 +219,9 @@ def annotate(code: str) -> tuple[list[Anchor], AnchorReport, int]:
         if 1 <= anchor.line <= len(lines) and lines[anchor.line - 1] == anchor.code.strip()
     ]
 
+    # Statement-level consolidation and coverage for non-trivial statements
+    anchors = process_statement_comments(code, anchors, retry_fn=retry_missed_cout)
+
     # Everything above proves a comment is attached to a line the user wrote.
     # This asks the weaker but different question of whether it can be true of
     # that line, and drops it silently when the tree says no — the same
@@ -237,6 +236,27 @@ def annotate(code: str) -> tuple[list[Anchor], AnchorReport, int]:
     combined.rejected_semantic = validation.rejected
     combined.anchors = validation.anchors
     return validation.anchors, combined, len(chunks)
+
+
+def retry_missed_cout(stmt: CoutStatement, code: str) -> str | None:
+    """Perform a single focused retry completion for a missed non-trivial cout statement."""
+    prompt = (
+        f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n"
+        f"<|im_start|>user\n"
+        f"Provide a concise, accurate line comment for the following C++ output statement. "
+        f"Explain what it calculates, operator precedence, what it prints, and if it flushes the stream:\n\n"
+        f"```cpp\n{stmt.code}\n```\n\n"
+        f'Return a single JSON object with field "comment".<|im_end|>\n'
+        f"<|im_start|>assistant\n"
+    )
+    try:
+        response_text = complete(prompt, max_new_tokens=150)
+        parsed = json.loads(response_text)
+        if isinstance(parsed, dict) and "comment" in parsed and parsed["comment"].strip():
+            return parsed["comment"].strip()
+    except Exception as exc:
+        LOGGER.warning("Focused retry for cout statement failed: %s", exc)
+    return None
 
 
 def explain(code: str) -> str:

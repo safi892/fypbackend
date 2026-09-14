@@ -89,8 +89,12 @@ footer { display: flex; justify-content: space-between; gap: 20px; font-size: 12
 .result-badge { font-size: 11px; color: #246d57; background: #e8f4ee; border-radius: 5px; padding: 6px 8px; white-space: nowrap; }
 .result-badge.review { color: #865612; background: #fff5e6; }
 details { margin-top: 24px; color: var(--muted); font-size: 12px; }
-.api-response-details summary { display: inline; }
+.api-response-details summary { display: inline; cursor: pointer; }
 .api-response-details .text-button { margin-left: 8px; vertical-align: middle; }
+.copy-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #cbd6e8; background: #f4f7fb; color: #2a4f85; padding: 4px 10px; font-size: 12px; font-weight: 600; min-height: 28px; border-radius: 6px; cursor: pointer; transition: all 0.16s ease-in-out; user-select: none; }
+.copy-btn:hover { background: #e3ecf8; border-color: #9cb5dc; color: #173766; }
+.copy-btn.copied { background: #e6f4ea !important; color: #137333 !important; border-color: #34a853 !important; box-shadow: 0 0 0 2px rgba(52, 168, 83, 0.18); }
+.copy-btn.copy-failed { background: #fce8e6 !important; color: #c5221f !important; border-color: #ea4335 !important; }
 summary { padding: 8px 0; }
 #raw-response { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 350px; overflow: auto; }
 @media (min-width: 1600px) { .code-editor { height: 440px; } .results-panel { min-height: 724px; } }
