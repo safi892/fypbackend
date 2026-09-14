@@ -89,6 +89,8 @@ footer { display: flex; justify-content: space-between; gap: 20px; font-size: 12
 .result-badge { font-size: 11px; color: #246d57; background: #e8f4ee; border-radius: 5px; padding: 6px 8px; white-space: nowrap; }
 .result-badge.review { color: #865612; background: #fff5e6; }
 details { margin-top: 24px; color: var(--muted); font-size: 12px; }
+.api-response-details summary { display: inline; }
+.api-response-details .text-button { margin-left: 8px; vertical-align: middle; }
 summary { padding: 8px 0; }
 #raw-response { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 350px; overflow: auto; }
 @media (min-width: 1600px) { .code-editor { height: 440px; } .results-panel { min-height: 724px; } }

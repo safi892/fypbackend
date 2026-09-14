@@ -231,6 +231,21 @@ for (const [button, field] of [['copy-explanation', 'explanation'], ['copy-code'
   });
 }
 
+$('copy-api-response').addEventListener('click', async () => {
+  if (!result) return;
+  const button = $('copy-api-response');
+  const label = button.textContent;
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
+    button.textContent = 'Copied!';
+    $('announcement').textContent = 'API response copied to clipboard.';
+  } catch {
+    $('announcement').textContent = 'Clipboard unavailable. Select the response text to copy it manually.';
+    button.textContent = 'Select text to copy';
+  }
+  setTimeout(() => { button.textContent = label; }, 2500);
+});
+
 async function checkService() {
   $('retry-service').disabled = true;
   try {
