@@ -52,12 +52,13 @@ TASK_INSTRUCTIONS = {
         'Line-by-line comments (array of {"line", "code", "comment"} objects, where "line" is '
         'the 1-based line number and "code" is that line copied verbatim from the input. Never '
         "reformat or rewrite the code, and only comment lines that carry meaning. Treat complete "
-        "C++ statements as single units of meaning regardless of multiline formatting. For multiline "
-        "statements (such as chained cout stream insertions), provide a single unified comment on the "
-        "first line; do not fragment comments across continuation lines. Every cout statement containing "
-        "non-trivial expressions like arithmetic, comparisons, logical conditions, ternaries, calls, or "
-        "updates must receive a comment explaining its calculations, operator precedence, outputs, and "
-        "stream flushing)"
+        "C++ statements as single units of meaning regardless of multiline formatting. For "
+        "multiline statements (such as chained cout stream insertions), provide a single "
+        "unified comment on the first line; do not fragment comments across continuation "
+        "lines. Every cout statement containing non-trivial expressions like arithmetic, "
+        "comparisons, logical conditions, ternaries, calls, or updates must receive a "
+        "comment explaining its calculations, operator precedence, outputs, and stream "
+        "flushing)"
     ),
     "explanation": "Explanation",
     "optimize": (
@@ -70,10 +71,14 @@ TASK_INSTRUCTIONS = {
 
 #: Appended to the describing tasks.
 DESCRIBE_EFFECTS = (
-    "This code may contain defects. Do not assume it is correct. Describe what each statement "
-    "and line actually does when executed, and where a line's effect differs from what the surrounding "
-    "code appears intended to achieve, say so plainly. If calculations involve suspicious values "
-    "such as discounts exceeding 100% or produce negative results, explain that outcome explicitly."
+    "This code may contain defects. Do not assume it is correct. Describe what each "
+    "statement and line actually does when executed, and where a line's effect differs "
+    "from what the surrounding code appears intended to achieve, say so plainly. Prefer "
+    "fewer comments that explain non-obvious behavior, assumptions, and edge cases; skip "
+    "obvious output statements and normal exits. Label recursive base cases and recursive "
+    "cases from the control flow. Treat a parameter as having a default value only where "
+    "its declaration contains '='. If a discount is subtracted directly, describe it as a "
+    "fixed amount, not a percentage, unless the code uses a percent formula."
 )
 
 #: Only the tasks the probe covered. ``optimize`` is left alone: it was never
@@ -244,7 +249,8 @@ def retry_missed_cout(stmt: CoutStatement, code: str) -> str | None:
         f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n"
         f"<|im_start|>user\n"
         f"Provide a concise, accurate line comment for the following C++ output statement. "
-        f"Explain what it calculates, operator precedence, what it prints, and if it flushes the stream:\n\n"
+        f"Explain what it calculates, operator precedence, what it prints, and if it "
+        f"flushes the stream:\n\n"
         f"```cpp\n{stmt.code}\n```\n\n"
         f'Return a single JSON object with field "comment".<|im_end|>\n'
         f"<|im_start|>assistant\n"
