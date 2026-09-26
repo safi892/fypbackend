@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-8000}"
+PORT="${PORT:-8080}"
 MODEL_DIR="$ROOT/codet5_commenst_expla/checkpoint_best"
 
 export MODEL_PATH="$MODEL_DIR"

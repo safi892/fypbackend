@@ -98,7 +98,7 @@ flowchart TD
 
 ### Step 1: Live Input Validation (`POST /validate-code`)
 - **Purpose:** Gives real-time typing feedback in the browser playground and guards all analysis endpoints.
-- **Mechanism:** Passes C++ source into [`cpp_parser.parse()`](file:///Volumes/Data/saffi/fyp_backend/app/parsers/cpp_parser.py). If tree-sitter detects parse errors (`root.has_error`), it traverses child nodes to locate the exact syntax error line and returns actionable feedback (e.g., `"Check syntax near line 4: missing semicolon"`).
+- **Mechanism:** Passes C++ source into [`cpp_parser.parse()`](../app/parsers/cpp_parser.py). If tree-sitter detects parse errors (`root.has_error`), it traverses child nodes to locate the exact syntax error line and returns actionable feedback (e.g., `"Check syntax near line 4: missing semicolon"`).
 - **Zero Cost:** Requires no authentication, runs with sub-millisecond latency, and executes no LLM inference.
 
 ### Step 2: AST-Aware Chunking (`cpp_chunking.py`)
@@ -114,14 +114,14 @@ flowchart TD
 
 ### Step 4: Anchor Repair & Semantic Validation
 - **The Problem:** LLMs often hallucinate line numbers (e.g., putting comment on line 12 instead of line 15) or comment on meaningless lines (e.g., closing braces `}`).
-- **Anchor Relocation:** Quoted source text is 100% reliable even when line numbers drift. [`repair_anchors()`](file:///Volumes/Data/saffi/fyp_backend/app/model_processing/anchors.py) matches the quoted snippet back to the actual source lines.
+- **Anchor Relocation:** Quoted source text is 100% reliable even when line numbers drift. [`repair_anchors()`](../app/model_processing/anchors.py) matches the quoted snippet back to the actual source lines.
 - **Punctuation & Numeric Filters:** Automatically drops comments attached to pure braces, comments, or isolated numbers.
-- **Semantic AST Filter:** [`comment_validation.py`](file:///Volumes/Data/saffi/fyp_backend/app/model_processing/comment_validation.py) inspects whether the comment contradicts the node type (e.g., claiming a variable declaration is a loop).
+- **Semantic AST Filter:** [`comment_validation.py`](../app/model_processing/comment_validation.py) inspects whether the comment contradicts the node type (e.g., claiming a variable declaration is a loop).
 - **`needs_review` Calculation:** If anchors were discarded due to semantic mismatch or syntax failure, `needs_review=True` alerts the user that model drift was detected.
 
 ### Step 5: Code-Preserving Roman Urdu Translation
 - **The Problem:** Naive machine translation alters C++ variables and language keywords (e.g., translating `for (int i=0; ...)` or turning `sum` into an Urdu word).
-- **Masking Engine:** [`translate_protecting_code()`](file:///Volumes/Data/saffi/fyp_backend/app/model_processing/masking.py) replaces code identifiers and syntax with unicode delimiters (e.g., `⟦0⟧`).
+- **Masking Engine:** [`translate_protecting_code()`](../app/model_processing/masking.py) replaces code identifiers and syntax with unicode delimiters (e.g., `⟦0⟧`).
 - **Dual Translation Engine:**
   1. *Sentence Frames:* Matches common grammatical structures in code explanation to produce natural Urdu sentence ordering (verb-final syntax).
   2. *T5 Translation Model:* For complex prose, leverages an offline fine-tuned T5 translation model (`models/roman-model/t5-stage2-c`).

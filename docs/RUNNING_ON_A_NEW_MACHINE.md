@@ -5,6 +5,13 @@ and `llama.cpp` (a native binary). This page covers both, and the readiness
 probe tells you if the Qwen server is missing rather than leaving you to guess
 from a failed request.
 
+## Windows quick start
+
+Open Command Prompt in the project root and run `setup.bat`. It installs the
+Python environment, finds or downloads `llama-server`, and offers to launch the
+model server and API. Put the GGUF in `models\gguf\` first, or pass a direct
+download link with `setup.bat --model-url URL`.
+
 ## 1. Python environment
 
 ```bash

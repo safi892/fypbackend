@@ -20,7 +20,7 @@ This empirical report demonstrates the accuracy and reliability differences of t
 
 ## 2. In-Depth Technical Breakdown
 
-### A. Semantic Comment Validation ([`comment_validation.py`](file:///Volumes/Data/saffi/fyp_backend/app/model_processing/comment_validation.py))
+### A. Semantic Comment Validation ([`comment_validation.py`](../app/model_processing/comment_validation.py))
 
 #### Problem Before:
 The original implementation only looked at high-level facts of the enclosing function (`scope.has_loop`, `scope.has_self_call`). If a function contained a loop anywhere, any comment claiming a loop was accepted, even if anchored to a leaf statement like `return 0;` or `int temp = arr[i];`.
@@ -43,7 +43,7 @@ if line > scope.start_line:
 
 ---
 
-### B. Function Signature Extraction ([`equivalence.py`](file:///Volumes/Data/saffi/fyp_backend/app/model_processing/equivalence.py))
+### B. Function Signature Extraction ([`equivalence.py`](../app/model_processing/equivalence.py))
 
 #### Problem Before:
 Using a single regular expression (`SIGNATURE_RE`) caused:
@@ -65,7 +65,7 @@ else:
 
 ---
 
-### C. Clipboard Copying Engine ([`app/web/app.js`](file:///Volumes/Data/saffi/fyp_backend/app/web/app.js))
+### C. Clipboard Copying Engine ([`app/web/app.js`](../app/web/app.js))
 
 #### Problem Before:
 `navigator.clipboard` is restricted by web standards to HTTPS and `localhost`. Accessing the testing workspace from an Android emulator, a mobile phone, or a LAN IP (`http://192.168.1.50:8000`) caused `navigator.clipboard` to be undefined, resulting in unhandled exceptions and no copied text.

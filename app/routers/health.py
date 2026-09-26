@@ -19,13 +19,13 @@ belongs at its own path.
 from __future__ import annotations
 
 import json
-import shutil
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from fastapi import APIRouter
 
+from app.core.compiler import find_cxx_compiler
 from app.core.config import (
     LLAMA_MODEL_PATH,
     LLAMA_SERVER_URL,
@@ -42,7 +42,7 @@ def _check_llama_server() -> tuple[bool, str]:
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         return False, (
             f"not answering at {LLAMA_SERVER_URL} ({exc}). "
-            f"Start it with ./run_model_server.sh --bg"
+            "Start llama-server with the configured model and port."
         )
     if status != "ok":
         return False, f"reachable but still loading the model (status: {status})"
@@ -60,13 +60,13 @@ def _check_model_file() -> tuple[bool, str]:
 
 
 def _check_compiler() -> tuple[bool, str]:
-    compiler = shutil.which("c++")
+    compiler = find_cxx_compiler()
     if compiler is None:
         return False, (
-            "no c++ on PATH. Comments and explanations still work; optimisations "
+            "no C++ compiler on PATH. Comments and explanations still work; optimisations "
             "cannot be verified and will be returned unchecked."
         )
-    return True, compiler
+    return True, compiler.command
 
 
 @router.get("/ready")

@@ -20,6 +20,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from app.core.compiler import find_cxx_compiler
+
 # Prose separators the model inserts after the code. A line that starts with '#'
 # but is NOT a preprocessor directive (i.e. '# ' or '###') marks prose.
 _PROSE_RE = re.compile(r"^\s*#(\s|#)")
@@ -53,29 +55,6 @@ def _extract_code_region(text: str) -> str:
     return "\n".join(code_lines).strip()
 
 
-import os
-import shutil
-
-
-def _find_cxx_compiler() -> str:
-    """Locate an available C++ compiler executable.
-
-    Problem solved: hardcoding 'gcc' fails on environments where only clang++ or
-    c++ is present, and gcc defaults to older standards unless explicit standard
-    flags are supplied. We prioritize CXX environment variable, then standard
-    tools (c++, g++, clang++), falling back to 'gcc'.
-
-    :return: compiler executable name or path.
-    """
-    env_cxx = os.getenv("CXX")
-    if env_cxx and shutil.which(env_cxx):
-        return env_cxx
-    for candidate in ("c++", "g++", "clang++", "gcc"):
-        if shutil.which(candidate):
-            return candidate
-    return "gcc"
-
-
 def check_cpp_syntax(code: str) -> tuple[bool, str | None]:
     """Type-check C++ source with ``c++ -fsyntax-only -std=c++17``.
 
@@ -95,16 +74,16 @@ def check_cpp_syntax(code: str) -> tuple[bool, str | None]:
 
     source = _STD_PREAMBLE + region
 
-    compiler = _find_cxx_compiler()
+    compiler = find_cxx_compiler()
+    if compiler is None:
+        return True, None
     try:
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".cpp", delete=False
-        ) as handle:
+        with tempfile.NamedTemporaryFile("w", suffix=".cpp", delete=False) as handle:
             handle.write(source)
             path = handle.name
         try:
             result = subprocess.run(
-                [compiler, "-fsyntax-only", "-std=c++17", "-x", "c++", path],
+                compiler.syntax_command(Path(path)),
                 capture_output=True,
                 text=True,
                 timeout=_GCC_TIMEOUT_SECONDS,

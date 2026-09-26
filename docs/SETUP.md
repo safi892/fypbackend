@@ -45,7 +45,7 @@ brew install python@3.11
 # Ubuntu / Debian
 sudo apt install python3.11 python3.11-venv
 
-# Windows — install from python.org, then use Git Bash or WSL for the scripts
+# Windows — install from python.org. The included setup.bat can also install it through uv.
 ```
 
 `.python-version` pins 3.11 for tools that read it (uv, pyenv).
@@ -92,6 +92,12 @@ Verify:
 .venv/bin/python -m pytest -q
 ```
 
+On Windows, use the virtual environment's Windows interpreter instead:
+
+```bat
+.venv\Scripts\python.exe -m pytest -q
+```
+
 ## 3. llama.cpp
 
 The API does not load the Qwen model itself. It talks to `llama-server`, which
@@ -109,7 +115,8 @@ cd llama.cpp && cmake -B build && cmake --build build --config Release -j
 sudo cp build/bin/llama-server /usr/local/bin/
 
 # Windows — download a release binary from
-# https://github.com/ggml-org/llama.cpp/releases and put it on PATH
+# https://github.com/ggml-org/llama.cpp/releases and put it on PATH,
+# or let setup.bat fetch it for you.
 ```
 
 Verify:
@@ -233,6 +240,19 @@ without it.
 
 Port 8081 is deliberate: the API owns 8080, and the two competing for the
 socket is a confusing way to discover the clash.
+
+### Windows
+
+From Command Prompt in the project root, run:
+
+```bat
+setup.bat
+```
+
+The setup command installs missing dependencies and offers to start both
+services. After the first run, `setup.bat start` starts them, `setup.bat status`
+checks them, and `setup.bat stop` stops them. The API is at
+`http://localhost:8080/`.
 
 Managing the model server:
 

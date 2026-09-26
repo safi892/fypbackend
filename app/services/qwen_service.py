@@ -165,7 +165,7 @@ def complete(prompt: str, max_new_tokens: int | None = None) -> str:
         # when they start the API without starting the model server.
         raise LlamaServerUnavailable(
             f"llama-server at {LLAMA_SERVER_URL} is not answering ({exc}). "
-            f"Start it with ./run_model_server.sh --bg (model: {LLAMA_MODEL_PATH})."
+            f"Start llama-server with model {LLAMA_MODEL_PATH}."
         ) from exc
 
 
@@ -236,7 +236,9 @@ def annotate(code: str) -> tuple[list[Anchor], AnchorReport, int]:
     for rejection in validation.rejections:
         LOGGER.info(
             "qwen backend: rejected comment on line %d (%s: %s)",
-            rejection.anchor.line, rejection.rule, rejection.detail,
+            rejection.anchor.line,
+            rejection.rule,
+            rejection.detail,
         )
     combined.rejected_semantic = validation.rejected
     combined.anchors = validation.anchors
@@ -289,7 +291,12 @@ def run(code: str) -> QwenOutput:
     LOGGER.info(
         "qwen backend: %d chunks, %d/%d anchors kept "
         "(%d exact, %d relocated, %d dropped, %d refuted by the tree)",
-        chunks, report.kept, report.total, report.exact, report.relocated, report.dropped,
+        chunks,
+        report.kept,
+        report.total,
+        report.exact,
+        report.relocated,
+        report.dropped,
         report.rejected_semantic,
     )
     return QwenOutput(

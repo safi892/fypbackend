@@ -1,6 +1,6 @@
-import os
 import sqlite3
 import threading
+from pathlib import Path
 
 from app.core.config import DB_PATH
 
@@ -12,11 +12,10 @@ def get_db_lock() -> threading.Lock:
 
 
 def get_db_connection() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    if not os.path.exists(DB_PATH):
-        open(DB_PATH, "a", encoding="utf-8").close()
+    path = Path(DB_PATH).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(DB_PATH, check_same_thread=False)
+    connection = sqlite3.connect(path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     return connection
 

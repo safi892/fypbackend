@@ -19,25 +19,43 @@ error either.
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.compiler import CxxCompiler, find_cxx_compiler
+from app.parsers import cpp_parser
+
 #: Argument types the generated driver knows how to supply values for.
 SCALAR_TYPES = {
-    "int", "long", "long long", "size_t", "unsigned", "double", "float", "bool",
-    "char", "unsigned char", "short", "unsigned long",
+    "int",
+    "long",
+    "long long",
+    "size_t",
+    "unsigned",
+    "double",
+    "float",
+    "bool",
+    "char",
+    "unsigned char",
+    "short",
+    "unsigned long",
 }
 
 #: Spellings of the same scalar. Refusing a function over its author's choice
 #: of prefix declines a large slice of ordinary C++ for no reason.
 TYPE_ALIASES = {
-    "std::size_t": "size_t", "unsigned int": "unsigned", "signed int": "int",
-    "ll": "long long", "ull": "long long", "int64_t": "long long",
-    "std::string": "string", "uint": "unsigned", "lli": "long long",
+    "std::size_t": "size_t",
+    "unsigned int": "unsigned",
+    "signed int": "int",
+    "ll": "long long",
+    "ull": "long long",
+    "int64_t": "long long",
+    "std::string": "string",
+    "uint": "unsigned",
+    "lli": "long long",
 }
 
 #: Driven as words rather than numbers.
@@ -166,9 +184,6 @@ class EquivalenceResult:
         return f"equivalent on {self.cases} inputs, {self.speedup:.1f}x faster"
 
 
-from app.parsers import cpp_parser
-
-
 def _parse_signature_ast(code: str) -> Signature | None:
     """Extract the first function signature using Tree-sitter C++ AST traversal.
 
@@ -291,7 +306,6 @@ def parse_signature(code: str) -> Signature | None:
     return _parse_signature_regex(code)
 
 
-
 def _split_params(raw: str) -> list[str]:
     """Split on the commas that separate parameters, not the ones inside types.
 
@@ -376,7 +390,7 @@ def _driver(signature: Signature, cases: list[tuple[Value, ...]]) -> str:
 
 
 def _build_and_run(
-    source: str, workdir: Path, tag: str, timeout: float, runs: int = 3
+    source: str, workdir: Path, tag: str, timeout: float, compiler: CxxCompiler, runs: int = 3
 ) -> tuple[str | None, str, float]:
     """Compile once, run several times, and keep the fastest run.
 
@@ -387,17 +401,27 @@ def _build_and_run(
     path.write_text(source, encoding="utf-8")
     binary = workdir / tag
     build = subprocess.run(
-        ["c++", "-std=c++17", "-O2", "-o", str(binary), str(path)],
-        capture_output=True, text=True, timeout=timeout,
+        compiler.build_command(path, binary),
+        capture_output=True,
+        cwd=workdir,
+        text=True,
+        timeout=timeout,
     )
     if build.returncode != 0:
-        return None, f"compile failed: {build.stderr.strip().splitlines()[-1][:200]}", 0.0
+        errors = (build.stderr or build.stdout).strip().splitlines()
+        detail = errors[-1][:200] if errors else f"compiler exited {build.returncode}"
+        return None, f"compile failed: {detail}", 0.0
+    executable = compiler.executable_path(binary)
+    if executable is None:
+        return None, "compiler did not produce an executable", 0.0
     best = float("inf")
     result = None
     for _ in range(runs):
         started = time.perf_counter()
         try:
-            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(
+                [str(executable)], capture_output=True, text=True, timeout=timeout
+            )
         except subprocess.TimeoutExpired:
             return None, f"ran longer than {timeout:g}s", timeout
         best = min(best, time.perf_counter() - started)
@@ -409,7 +433,12 @@ def _build_and_run(
 #: Sequence inputs in the order a reviewer would try them. The empty case earns
 #: its place: it is where ``size() - 1`` on an unsigned type wraps.
 BUFFER_CASES: tuple[tuple[int, ...], ...] = (
-    (), (7,), (1, 2, 3, 4), (4, 3, 2, 1), (5, 1, 5, 1, 5), (-3, 8, 0, -1, 2),
+    (),
+    (7,),
+    (1, 2, 3, 4),
+    (4, 3, 2, 1),
+    (5, 1, 5, 1, 5),
+    (-3, 8, 0, -1, 2),
 )
 
 #: Text inputs chosen the same way: empty, single, palindrome, mixed case with
@@ -484,7 +513,8 @@ def check(original: str, optimized: str, *, timeout: float = 20.0) -> Equivalenc
     """
     if not optimized.strip() or optimized.strip() == original.strip():
         return EquivalenceResult(reason="no rewrite was offered")
-    if shutil.which("c++") is None:
+    compiler = find_cxx_compiler()
+    if compiler is None:
         return EquivalenceResult(reason="no C++ compiler on this host")
 
     signature = parse_signature(original)
@@ -509,10 +539,14 @@ def check(original: str, optimized: str, *, timeout: float = 20.0) -> Equivalenc
 
     with tempfile.TemporaryDirectory() as directory:
         workdir = Path(directory)
-        expected, error, _ = _build_and_run(HEADERS + original + driver, workdir, "orig", timeout)
+        expected, error, _ = _build_and_run(
+            HEADERS + original + driver, workdir, "orig", timeout, compiler
+        )
         if expected is None:
             return EquivalenceResult(reason=f"original {error}", cases=len(cases))
-        actual, error, _ = _build_and_run(HEADERS + optimized + driver, workdir, "opt", timeout)
+        actual, error, _ = _build_and_run(
+            HEADERS + optimized + driver, workdir, "opt", timeout, compiler
+        )
         if actual is None:
             return EquivalenceResult(reason=f"rewrite {error}", cases=len(cases))
 
@@ -529,11 +563,15 @@ def check(original: str, optimized: str, *, timeout: float = 20.0) -> Equivalenc
             return result
 
         empty, _, baseline = _build_and_run(
-            HEADERS + "int main(){return 0;}", workdir, "base", timeout
+            HEADERS + "int main(){return 0;}", workdir, "base", timeout, compiler
         )
         baseline = baseline if empty is not None else 0.0
-        _, _, slow = _build_and_run(HEADERS + original + timing_driver, workdir, "slow", timeout)
-        _, _, fast = _build_and_run(HEADERS + optimized + timing_driver, workdir, "fast", timeout)
+        _, _, slow = _build_and_run(
+            HEADERS + original + timing_driver, workdir, "slow", timeout, compiler
+        )
+        _, _, fast = _build_and_run(
+            HEADERS + optimized + timing_driver, workdir, "fast", timeout, compiler
+        )
 
     original_work = max(0.0, slow - baseline)
     optimized_work = max(0.0, fast - baseline)

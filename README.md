@@ -4,15 +4,25 @@ This service exposes a FastAPI endpoint that analyzes source code using a local 
 
 ### Browser playground
 
-Start the model and API, then open **http://localhost:8000/**:
+Start the model and API, then open **http://localhost:8080/**:
 
 ```bash
-export LLAMA_MODEL_PATH=models/gguf/qwen-cpp-review-q4_k_m.gguf
+export LLAMA_MODEL_PATH=models/gguf/qwen-cpp-review-v3-q4_k_m.gguf
 ./run_model_server.sh --bg
-.venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
 Set `LLAMA_MODEL_PATH` to your installed GGUF filename if it differs.
+
+On Windows, open Command Prompt in the project directory and run:
+
+```bat
+setup.bat
+```
+
+It installs Python dependencies, finds or downloads `llama-server`, and can
+start both services. Later, use `setup.bat start`, `setup.bat status`, and
+`setup.bat stop`. Put the GGUF in `models\gguf\` before starting.
 
 Paste C++ code (or load an example), choose English or Roman Urdu, and click
 **Analyze code**. No account is needed for testing. The page displays the
@@ -48,4 +58,5 @@ Project structure:
 - `app/main.py` is the FastAPI entrypoint
 - `run_model_server.sh` starts llama.cpp with the model
 - `runserver.sh` starts the API
+- `setup.bat` installs and starts the API on Windows
 - `uv sync` installs dependencies

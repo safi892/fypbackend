@@ -57,5 +57,8 @@ codet5_commenst_expla/
 *.pid
 logs/
 
+# Windows setup.bat artifacts (downloaded llama.cpp build + setup stamp)
+tools/
+
 # OS files
 .DS_Store

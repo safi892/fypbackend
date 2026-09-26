@@ -8,14 +8,13 @@ proposes.
 
 from __future__ import annotations
 
-import shutil
-
 import pytest
 
+from app.core.compiler import find_cxx_compiler
 from app.model_processing.equivalence import check, parse_signature
 from app.services import optimization_service
 
-needs_compiler = pytest.mark.skipif(shutil.which("c++") is None, reason="needs a C++ compiler")
+needs_compiler = pytest.mark.skipif(find_cxx_compiler() is None, reason="needs a C++ compiler")
 
 NAIVE = "int fib(int n)\n{\n  if (n <= 1)\n    return n;\n  return fib(n - 1) + fib(n - 2);\n}"
 
@@ -71,7 +70,6 @@ def test_reads_template_function_signature():
     assert sig.name == "sortValues"
     assert sig.return_type == "void"
     assert sig.drivable
-
 
 
 def test_a_rewrite_that_corrupts_an_array_is_rejected():
