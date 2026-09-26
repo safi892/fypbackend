@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-10T08:12:54.281531+00:00",
+  "title": "Design System: Code Analyzer",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "authentication-dialog",
+        "value": "0 24px 80px #18233340",
+        "purpose": "Raise the authentication dialog."
+      }
+    ],
+    "motion": [
+      {
+        "name": "button-background",
+        "value": "background 160ms",
+        "purpose": "Button hover feedback."
+      },
+      {
+        "name": "loading-spinner",
+        "value": "spin 1s linear infinite",
+        "purpose": "Analysis loading; disabled under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "small-max",
+        "value": "520px"
+      },
+      {
+        "name": "stacked-max",
+        "value": "900px"
+      },
+      {
+        "name": "large-min",
+        "value": "1600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary button",
+      "kind": "button",
+      "description": "Extracted from the shipped playground.",
+      "html": "<button class=\"ds-button ds-primary\">Analyze code</button>",
+      "css": ":host { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; color: #1e293b; --blue: #2454d6; --muted: #626e7f; --border: #dce2ea; }\n.ds-button { min-height: 44px; border: 0; border-radius: 8px; padding: 11px 18px; font-size: 14px; font-weight: 600; transition: background 160ms; }\n.ds-primary { background: var(--blue); color: white; }\n.ds-primary:hover { background: #1b43b3; }\n:focus-visible { outline: 3px solid #497aef; }\nbutton { cursor: pointer; outline-offset: 4px; } button:disabled { cursor: wait; opacity: .6; } @media (prefers-reduced-motion: reduce) { button { transition: none; } }",
+      "refersTo": "button-primary"
+    },
+    {
+      "name": "Secondary button",
+      "kind": "button",
+      "description": "Extracted from the shipped playground.",
+      "html": "<button class=\"ds-button ds-secondary\">Sign in</button>",
+      "css": ":host { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; color: #1e293b; --blue: #2454d6; --muted: #626e7f; --border: #dce2ea; }\n.ds-button { min-height: 44px; border: 0; border-radius: 8px; padding: 11px 18px; font-size: 14px; font-weight: 600; transition: background 160ms; }\n.ds-secondary { background: #edf1f6; color: #243247; }\n.ds-secondary:hover { background: #e1e7ef; }\n:focus-visible { outline: 3px solid #497aef; }\nbutton { cursor: pointer; outline-offset: 4px; } button:disabled { cursor: wait; opacity: .6; } @media (prefers-reduced-motion: reduce) { button { transition: none; } }",
+      "refersTo": "button-secondary"
+    },
+    {
+      "name": "Text action",
+      "kind": "button",
+      "description": "Extracted from the shipped playground.",
+      "html": "<button class=\"ds-text-button\">Copy code</button>",
+      "css": ":host { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; color: #1e293b; --blue: #2454d6; --muted: #626e7f; --border: #dce2ea; }\n.ds-text-button { background: transparent; border: 0; color: #345c9b; padding: 8px; min-height: 40px; font-size: 13px; font-weight: 600; border-radius: 6px; }\n.ds-text-button:hover { background: #eaf0f9; }\n:focus-visible { outline: 3px solid #497aef; }\nbutton { cursor: pointer; outline-offset: 4px; } button:disabled { cursor: wait; opacity: .6; } @media (prefers-reduced-motion: reduce) { button { transition: none; } }",
+      "refersTo": "button-text"
+    },
+    {
+      "name": "Account input",
+      "kind": "input",
+      "description": "Extracted from the shipped playground.",
+      "html": "<label for=\"ds-email\">Email</label><input id=\"ds-email\" type=\"email\" autocomplete=\"username\">",
+      "css": ":host { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; color: #1e293b; --blue: #2454d6; --muted: #626e7f; --border: #dce2ea; }\nlabel { display: block; margin: 18px 0 7px; font-size: 13px; font-weight: 600; }\ninput { width: 100%; min-height: 44px; border: 1px solid #bac6d6; border-radius: 7px; padding: 10px 12px; }\n:focus-visible { outline: 3px solid #497aef; }"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "description": "Extracted from the shipped playground.",
+      "html": "<nav aria-label=\"Main navigation\"><span class=\"ds-nav-current\">Playground</span><a href=\"/docs\">API docs</a></nav>",
+      "css": ":host { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; color: #1e293b; --blue: #2454d6; --muted: #626e7f; --border: #dce2ea; }\nnav { align-self: stretch; display: flex; align-items: center; gap: 28px; font-size: 14px; color: var(--muted); }\nnav a:hover { color: var(--blue); }\n.ds-nav-current { height: 100%; display: flex; align-items: center; border-bottom: 2px solid var(--blue); color: var(--blue); font-weight: 600; }\n:focus-visible { outline: 3px solid #497aef; }\nnav { height: 80px; } a { color: inherit; text-decoration: none; outline-offset: 4px; }"
+    },
+    {
+      "name": "Language tag",
+      "kind": "chip",
+      "description": "Extracted from the shipped playground.",
+      "html": "<span class=\"ds-language-tag\">C++</span>",
+      "css": ":host { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; color: #1e293b; --blue: #2454d6; --muted: #626e7f; --border: #dce2ea; }\n.ds-language-tag { background: #edf1f6; font-size: 12px; padding: 6px 9px; border-radius: 5px; font-weight: 600; }",
+      "refersTo": "language-tag"
+    },
+    {
+      "name": "Workspace panel",
+      "kind": "card",
+      "description": "Extracted from the shipped playground.",
+      "html": "<section class=\"ds-editor-panel\"><div class=\"ds-panel-heading\"><h2>Your code</h2></div></section>",
+      "css": ":host { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; color: #1e293b; --blue: #2454d6; --muted: #626e7f; --border: #dce2ea; }\n.ds-editor-panel, .ds-results-panel { border: 1px solid var(--border); border-radius: 14px; background: #fff; min-width: 0; overflow: hidden; }\n.ds-panel-heading { padding: 23px 24px; display: flex; gap: 12px; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }\nh2 { font-size: 17px; letter-spacing: -.25px; margin: 0 0 6px; }",
+      "refersTo": "panel"
+    }
+  ],
+  "narrative": {
+    "northStar": "The C++ reading workspace",
+    "overview": "The shipped interface pairs a graphite source editor with a cool white reading surface. Restrained blue actions, system typography, and generous separation keep attention on entering code and understanding the response. This documents the implementation in `app/web/`; it does not introduce a new visual direction.",
+    "keyCharacteristics": [
+      "Cool white surfaces with graphite source editing.",
+      "Blue actions with plain-language labels.",
+      "System sans for interface text and monospace for source.",
+      "Flat panels and a raised authentication dialog."
+    ],
+    "rules": [],
+    "dos": [
+      "Do preserve the distinction between source editing and result reading.",
+      "Do use text labels alongside status colors.",
+      "Do keep code whitespace intact and provide scrolling for long source lines.",
+      "Do retain keyboard focus, labeled controls, and reduced-motion behavior."
+    ],
+    "donts": [
+      "Don't render source or model responses as HTML.",
+      "Don't treat a completion badge as a guarantee of code correctness."
+    ]
+  }
+}

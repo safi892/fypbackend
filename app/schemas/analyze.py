@@ -12,7 +12,19 @@ single source of truth for the JSON contract shared by router + frontend.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+class CodeValidationRequest(BaseModel):
+    code: str = Field(..., max_length=100_000)
+
+
+class CodeValidationResponse(BaseModel):
+    valid: bool
+    message: str
+    line: int | None = None
 
 
 class AnalyzeRequest(BaseModel):
@@ -20,7 +32,7 @@ class AnalyzeRequest(BaseModel):
 
     code: str = Field(..., min_length=1, description="Source code to analyze")
     source: str | None = Field(None, description="Client identifier, e.g. mobile")
-    language: str = Field("cpp", description="Source language (currently cpp)")
+    language: Literal["cpp"] = Field("cpp", description="Source language: C++ only")
     output_language: str = Field(
         "english",
         description="Language for generated text: english | roman_urdu",
@@ -86,6 +98,7 @@ class LineComment(BaseModel):
     line: int = Field(..., ge=1, description="1-based line number in the submitted code")
     code: str = Field(..., description="That line, exactly as submitted")
     comment: str = Field(..., description="What the model says about it")
+    placement: str = Field("inline", description="Placement of comment: inline or before")
 
 
 class AnchorStats(BaseModel):
@@ -156,7 +169,11 @@ class AnalyzeResponse(BaseModel):
     needs_review: bool = Field(
         False,
         description="True when the generated commented code failed the C++ "
-        "syntax gate and should be checked by a human before being trusted.",
+        "syntax gate, dropped anchors, or suspicious code patterns were detected.",
+    )
+    review_reasons: list[str] = Field(
+        default_factory=list,
+        description="Specific reasons why human review is advised.",
     )
 
 

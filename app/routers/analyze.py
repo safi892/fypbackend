@@ -11,11 +11,15 @@ task and makes the pipeline order explicit and easy to follow/test.
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.model_processing.anchors import Anchor, render_commented_code
+from app.model_processing.statement_comments import detect_suspicious_logic
 from app.model_processing.syntax_check import check_cpp_syntax
+from app.parsers import cpp_parser
 from app.schemas.analyze import (
     AnalyzeRequest,
     AnalyzeResponse,
     AnchorStats,
+    CodeValidationRequest,
+    CodeValidationResponse,
     LineComment,
     OptimizeRequest,
     OptimizeResponse,
@@ -38,6 +42,46 @@ from app.services.history_service import list_history, record_history
 router = APIRouter()
 
 
+def _validate_cpp_source(code: str) -> CodeValidationResponse:
+    """Use the same syntax gate for live editor feedback and model requests."""
+    root = cpp_parser.parse(code)
+    if root is None:
+        raise HTTPException(
+            status_code=503,
+            detail="C++ validation is unavailable. Restore the C++ parser and try again.",
+        )
+    if not any(node.type != "comment" for node in root.named_children):
+        return CodeValidationResponse(
+            valid=False, message="Only C++ source code is supported. Add a C++ function or program."
+        )
+    if root.has_error:
+        wrapped = f"void __snippet__() {{\n{code}\n}}"
+        wrapped_root = cpp_parser.parse(wrapped)
+        if wrapped_root is not None and not wrapped_root.has_error:
+            return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
+
+        node = root
+        while not node.is_error and not node.is_missing:
+            child = next((child for child in node.children if child.has_error), None)
+            if child is None:
+                break
+            node = child
+        line = node.start_point.row + 1
+        return CodeValidationResponse(
+            valid=False,
+            message=f"Only C++ source code is supported. Check the syntax near line {line}. "
+            "Finish your statement and check for missing semicolons or brackets.",
+            line=line,
+        )
+    return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
+
+
+@router.post("/validate-code", response_model=CodeValidationResponse)
+def validate_code(payload: CodeValidationRequest) -> CodeValidationResponse:
+    """Check editor input without authentication, inference, execution, or history writes."""
+    return _validate_cpp_source(payload.code)
+
+
 def _anchor_from_item(item: dict[str, object]) -> Anchor:
     """Build a checked anchor from the model's normalized line-comment dict."""
     line = item.get("line")
@@ -47,6 +91,7 @@ def _anchor_from_item(item: dict[str, object]) -> Anchor:
         line=line,
         code=str(item.get("code", "")),
         comment=str(item.get("comment", "")),
+        placement=str(item.get("placement", "inline")),
     )
 
 
@@ -64,13 +109,19 @@ def _translated_line_comments(items: list[dict[str, object]]) -> list[dict[str, 
 @router.post(
     "/analyze",
     response_model=AnalyzeResponse,
-    response_model_include={"input_code", "commented_code", "explanation", "needs_review"},
+    response_model_include={
+        "input_code",
+        "commented_code",
+        "explanation",
+        "needs_review",
+        "review_reasons",
+    },
 )
 def analyze(
     payload: AnalyzeRequest,
     authorization: str | None = Header(default=None),
 ) -> AnalyzeResponse:
-    """Run the full code-review pipeline and persist history.
+    """Run the full code-review pipeline, with optional authenticated history.
 
     Problem solved: this is the one entry point the mobile client calls. Why
     staged pipeline: static analysis (fast) feeds the internal rule-based
@@ -78,11 +129,15 @@ def analyze(
     stages (diff, translation) only run when requested.
 
     :param payload: the validated analysis request.
-    :param authorization: bearer token header (may be ``None`` -> 401).
+    :param authorization: optional bearer token header for saving history.
     :return: the combined result, filtered by FastAPI to the public fields.
-    :raises HTTPException: 401 if unauthenticated, 503 if the model cannot load.
+    :raises HTTPException: 401 if an invalid token is sent, 503 if the model cannot load.
     """
-    user = require_user(authorization)
+    user = require_user(authorization) if authorization else None
+
+    validation = _validate_cpp_source(payload.code)
+    if not validation.valid:
+        raise HTTPException(status_code=422, detail=validation.message)
 
     # Phase 3 — deterministic static analysis (cheap; feeds the rule-based
     # services below, never a model prompt).
@@ -120,7 +175,19 @@ def analyze(
     # drifting on this input, and what survived deserves a second look.
     stats = raw.anchor_stats or {}
     discarded = stats.get("dropped", 0) + stats.get("rejected_semantic", 0)
-    needs_review = (not syntax_ok and not raw.verified) or discarded > 0
+
+    review_reasons: list[str] = []
+    suspicious = detect_suspicious_logic(payload.code)
+    if suspicious:
+        review_reasons.extend(suspicious)
+    if not syntax_ok and not raw.verified:
+        review_reasons.append("C++ syntax check failed on generated code.")
+    if discarded > 0:
+        review_reasons.append(
+            f"{discarded} comment anchor(s) were dropped or refuted by syntax rules."
+        )
+
+    needs_review = len(review_reasons) > 0
 
     # Phase 4 — only when the client sent a previous version.
     change_analysis = None
@@ -153,15 +220,17 @@ def analyze(
         anchor_stats=AnchorStats(**raw.anchor_stats) if raw.anchor_stats else None,
         verified_comments=raw.verified,
         needs_review=needs_review,
+        review_reasons=review_reasons,
     )
 
-    record_history(
-        user_id=user.id,
-        input_code=response.input_code,
-        commented_code=response.commented_code,
-        explanation=response.explanation,
-        source=payload.source,
-    )
+    if user is not None:
+        record_history(
+            user_id=user.id,
+            input_code=response.input_code,
+            commented_code=response.commented_code,
+            explanation=response.explanation,
+            source=payload.source,
+        )
 
     return response
 

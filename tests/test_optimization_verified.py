@@ -56,6 +56,24 @@ def test_drives_the_shapes_real_submissions_are_written_in():
     assert parse_signature("void twice(int& x) { }").drivable
 
 
+def test_reads_modern_trailing_return_type():
+    sig = parse_signature("auto add(int a, int b) -> int { return a + b; }")
+    assert sig is not None
+    assert sig.name == "add"
+    assert sig.return_type == "int"
+    assert sig.drivable
+    assert len(sig.params) == 2
+
+
+def test_reads_template_function_signature():
+    sig = parse_signature("template <typename T>\nvoid sortValues(int data[], int n) { }")
+    assert sig is not None
+    assert sig.name == "sortValues"
+    assert sig.return_type == "void"
+    assert sig.drivable
+
+
+
 def test_a_rewrite_that_corrupts_an_array_is_rejected():
     """The measured case: a bubble sort whose swap has no temporary.
 

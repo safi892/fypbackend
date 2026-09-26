@@ -166,8 +166,94 @@ class EquivalenceResult:
         return f"equivalent on {self.cases} inputs, {self.speedup:.1f}x faster"
 
 
-def parse_signature(code: str) -> Signature | None:
-    """Read the first real function definition out of ``code``."""
+from app.parsers import cpp_parser
+
+
+def _parse_signature_ast(code: str) -> Signature | None:
+    """Extract the first function signature using Tree-sitter C++ AST traversal.
+
+    Problem solved: regex signature matching breaks on modern C++ constructs
+    (trailing return types, templates, complex qualifiers). Tree-sitter provides
+    ground-truth structural parsing.
+    """
+    root = cpp_parser.parse(code)
+    if root is None:
+        return None
+
+    for fn in cpp_parser.iter_descendants(root, {"function_definition"}):
+        decl = fn.child_by_field_name("declarator")
+        while decl and decl.type in ("pointer_declarator", "reference_declarator"):
+            decl = decl.child_by_field_name("declarator")
+        if not decl or decl.type != "function_declarator":
+            continue
+
+        name_node = decl.child_by_field_name("declarator")
+        name = cpp_parser.node_text(name_node) if name_node else ""
+        if not name or name in {"main", "if", "for", "while", "switch", "return", "sizeof"}:
+            continue
+
+        # Return type
+        trailing = next((c for c in decl.children if c.type == "trailing_return_type"), None)
+        if trailing:
+            ret_type_node = trailing.child_by_field_name("type")
+            ret = (
+                cpp_parser.node_text(ret_type_node)
+                if ret_type_node
+                else cpp_parser.node_text(trailing).replace("->", "").strip()
+            )
+        else:
+            type_node = fn.child_by_field_name("type")
+            ret = cpp_parser.node_text(type_node) if type_node else "void"
+            top_decl = fn.child_by_field_name("declarator")
+            if top_decl and top_decl.type == "pointer_declarator":
+                ret += "*"
+            elif top_decl and top_decl.type == "reference_declarator":
+                ret += "&"
+
+        # Parameters
+        params_node = next((c for c in decl.children if c.type == "parameter_list"), None)
+        params: list[Parameter] = []
+        if params_node:
+            for p in params_node.children:
+                if p.type != "parameter_declaration":
+                    continue
+                p_text = cpp_parser.node_text(p)
+                is_const = "const" in p_text.split()
+                is_array = "[" in p_text
+                is_reference = "&" in p_text or "*" in p_text
+
+                type_child = p.child_by_field_name("type")
+                p_type = cpp_parser.node_text(type_child) if type_child else ""
+                decl_child = p.child_by_field_name("declarator")
+                curr = decl_child
+                while curr and curr.type in (
+                    "array_declarator",
+                    "reference_declarator",
+                    "pointer_declarator",
+                ):
+                    curr = curr.child_by_field_name("declarator") or next(
+                        (c for c in curr.children if c.type == "identifier"), None
+                    )
+                p_name = cpp_parser.node_text(curr) if curr else ""
+                if not p_type and not p_name:
+                    continue
+                params.append(
+                    Parameter(
+                        type=p_type,
+                        name=p_name,
+                        is_array=is_array,
+                        is_reference=is_reference,
+                        is_const=is_const,
+                    )
+                )
+
+        return Signature(ret.strip(), name.strip(), tuple(params))
+
+    return None
+
+
+def _parse_signature_regex(code: str) -> Signature | None:
+    """Fallback regex signature reader if AST parsing is unavailable."""
     for match in SIGNATURE_RE.finditer(code):
         name = match.group("name")
         if name in {"main", "if", "for", "while", "switch", "return", "sizeof"}:
@@ -195,6 +281,15 @@ def parse_signature(code: str) -> Signature | None:
                 )
         return Signature(match.group("ret").strip(), name, tuple(params))
     return None
+
+
+def parse_signature(code: str) -> Signature | None:
+    """Read the first real function definition out of ``code`` using AST or regex."""
+    sig = _parse_signature_ast(code)
+    if sig is not None:
+        return sig
+    return _parse_signature_regex(code)
+
 
 
 def _split_params(raw: str) -> list[str]:

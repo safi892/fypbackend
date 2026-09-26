@@ -50,3 +50,18 @@ def test_undeclared_left_fails() -> None:
 def test_pure_prose_passes() -> None:
     ok, _ = check_cpp_syntax("### VERIFICATION\nLogic flow is consistent.")
     assert ok is True
+
+
+def test_modern_cpp17_syntax_passes() -> None:
+    """Ensure modern features like structured bindings compile cleanly."""
+    ok, err = check_cpp_syntax(
+        "#include <utility>\n"
+        "int unpack() {\n"
+        "    std::pair<int, int> p = {1, 2};\n"
+        "    auto [a, b] = p;\n"
+        "    return a + b;\n"
+        "}"
+    )
+    assert ok is True
+    assert err is None
+

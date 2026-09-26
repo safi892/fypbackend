@@ -38,6 +38,7 @@ class Anchor:
     line: int
     code: str
     comment: str
+    placement: str = "inline"
 
 
 @dataclass
@@ -185,7 +186,7 @@ def repair_anchors(code: str, raw: list[dict[str, Any]]) -> AnchorReport:
 
 
 def render_commented_code(code: str, anchors: list[Anchor]) -> str:
-    """Rebuild the source with each surviving comment appended to its line.
+    """Rebuild the source with each surviving comment attached to its line.
 
     This is what keeps the mobile contract intact: the app asks for
     ``commented_code`` and still receives the whole program as a string. The
@@ -194,20 +195,46 @@ def render_commented_code(code: str, anchors: list[Anchor]) -> str:
     model's reconstruction of it. Nothing can be silently reworded, reindented
     or dropped, because the source lines are never regenerated.
 
+    Comments with ``placement='before'`` are placed immediately before the line,
+    preserving the target line's indentation. Comments with ``placement='inline'``
+    are appended to the end of the line.
+
     :param code: the submitted source.
     :param anchors: anchors already checked against that source.
-    :return: the source with ``// comment`` appended to annotated lines.
+    :return: the source with comments attached.
     """
-    by_line: dict[int, list[str]] = {}
+    by_line: dict[int, list[Anchor]] = {}
     for anchor in anchors:
-        by_line.setdefault(anchor.line, []).append(anchor.comment)
+        by_line.setdefault(anchor.line, []).append(anchor)
 
     out: list[str] = []
     for number, line in enumerate(code.split("\n"), start=1):
-        comments = by_line.get(number)
-        if not comments:
+        line_anchors = by_line.get(number)
+        if not line_anchors:
             out.append(line)
             continue
-        joined = "; ".join(comment.rstrip(" .") for comment in comments)
-        out.append(f"{line}  // {joined}" if line.strip() else line)
+
+        before_anchors = [
+            a for a in line_anchors if getattr(a, "placement", "inline") == "before"
+        ]
+        inline_anchors = [
+            a for a in line_anchors if getattr(a, "placement", "inline") != "before"
+        ]
+
+        indent = line[: len(line) - len(line.lstrip())]
+        for a in before_anchors:
+            for comment_line in a.comment.strip().split("\n"):
+                comment_clean = comment_line.strip()
+                if not comment_clean:
+                    continue
+                if comment_clean.startswith("//"):
+                    out.append(f"{indent}{comment_clean}")
+                else:
+                    out.append(f"{indent}// {comment_clean}")
+
+        if inline_anchors:
+            joined = "; ".join(a.comment.rstrip(" .") for a in inline_anchors)
+            out.append(f"{line}  // {joined}" if line.strip() else line)
+        else:
+            out.append(line)
     return "\n".join(out)

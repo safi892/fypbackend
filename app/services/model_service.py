@@ -435,7 +435,13 @@ def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutp
                 explanation=result.explanation,
                 raw_text=result.raw_text,
                 line_comments=[
-                    {"line": a.line, "code": a.code, "comment": a.comment} for a in result.anchors
+                    {
+                        "line": a.line,
+                        "code": a.code,
+                        "comment": a.comment,
+                        "placement": getattr(a, "placement", "inline"),
+                    }
+                    for a in result.anchors
                 ],
                 anchor_stats={
                     "kept": result.report.kept,

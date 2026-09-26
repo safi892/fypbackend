@@ -1,0 +1,71 @@
+- generic [active] [ref=e1]:
+  - link "Skip to code editor" [ref=e2] [cursor=pointer]:
+    - /url: "#code"
+  - banner [ref=e3]:
+    - link "Code Analyzer home" [ref=e4] [cursor=pointer]:
+      - /url: /
+      - generic [aria-hidden] [ref=e5]:
+        - text: C
+        - generic [ref=e6]: ++
+      - text: Code Analyzer
+    - navigation "Main navigation" [ref=e7]:
+      - generic [ref=e8]: Playground
+      - link "API docs" [ref=e9] [cursor=pointer]:
+        - /url: /docs
+    - button "Sign in" [ref=e10] [cursor=pointer]
+  - main [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - heading "A little code. A clearer picture." [level=1] [ref=e14]
+        - paragraph [ref=e15]: Explore what your C++ code does, with explanations you can follow.
+      - generic [ref=e16]: Testing workspace
+    - generic [ref=e17]:
+      - region [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - heading "Your C++ code" [level=2] [ref=e21]
+            - text: C++ only. Paste a snippet or try an example.
+          - generic [ref=e22]: C++
+        - generic [ref=e23]:
+          - generic [ref=e24]:
+            - generic [ref=e25]: Load an example
+            - combobox "Load an example" [ref=e26] [cursor=pointer]:
+              - option "Load an example…" [selected]
+              - text: Binary search
+              - option "Sum an array"
+              - option "Factorial"
+            - button "Clear" [ref=e27] [cursor=pointer]
+          - generic [ref=e28]:
+            - generic [aria-hidden] [ref=e29]: "1"
+            - generic [ref=e30]: C++ source code
+            - textbox "C++ source code" [ref=e31]:
+              - /placeholder: "// Paste your C++ code here\n\nint add(int a, int b) {\n    return a + b;\n}"
+          - generic [ref=e32]:
+            - generic [ref=e33]: 0 lines · 0 characters
+            - generic [ref=e34]: C++ only · syntax checked
+          - generic [ref=e35]:
+            - generic [ref=e36]:
+              - generic [ref=e37]: Explain in
+              - combobox "Explain in" [ref=e38] [cursor=pointer]:
+                - option "English" [selected]
+                - option "Roman Urdu"
+            - button "Analyze code" [ref=e39] [cursor=pointer]: Analyze code →
+          - paragraph [ref=e40]: Use ⌘ / Ctrl + Enter to analyze
+      - region [ref=e41]:
+        - generic [ref=e43]:
+          - heading "Make sense of your code" [level=2] [ref=e44]
+          - text: Your analysis will appear here.
+        - generic [ref=e45]:
+          - generic [aria-hidden] [ref=e46]: "{ … }"
+          - heading "From code to understanding." [level=3] [ref=e47]
+          - paragraph [ref=e48]:
+            - text: Add your C++ code and select
+            - strong [ref=e49]: Analyze code
+            - text: . Get a plain-language explanation and comments alongside your source.
+          - generic [ref=e50]:
+            - generic [ref=e51]: Explanation
+            - generic [ref=e52]: Commented code
+    - generic [ref=e53]:
+      - status [ref=e54]: Model ready
+      - generic [ref=e55]: AI-generated explanations deserve a human read.
+    - status [ref=e56]

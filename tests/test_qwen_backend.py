@@ -256,6 +256,23 @@ def test_prompts_carry_the_chat_markers_the_checkpoint_expects(task):
     assert CODE in prompt
 
 
+@pytest.mark.parametrize("task", ["line_comments", "explanation"])
+def test_describing_prompts_include_fact_checking_guidance(task):
+    prompt = qwen_service.build_prompt(CODE, task)
+
+    assert "base cases and recursive cases" in prompt
+    assert "fixed amount, not a percentage" in prompt
+    assert "default value only where" in prompt
+    assert "skip obvious output statements" in prompt
+
+
+def test_optimize_prompt_does_not_get_comment_quality_guidance():
+    prompt = qwen_service.build_prompt(CODE, "optimize")
+
+    assert "fixed amount, not a percentage" not in prompt
+    assert "skip obvious output statements" not in prompt
+
+
 def test_unparseable_model_output_yields_no_anchors_rather_than_raising():
     assert qwen_service._field("not json at all", "line_comments") == []
     assert qwen_service._field("not json at all", "explanation") == ""

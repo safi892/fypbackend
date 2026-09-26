@@ -41,6 +41,9 @@ htmlcov/
 
 # Virtual environments
 .venv
+.impeccable
+.ai
+.playwright-mcp
 
 
 trained_model

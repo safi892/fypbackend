@@ -45,7 +45,7 @@ from app.parsers import cpp_parser
 # up into ``services``: the analyzer already answers "is this a loop" and "does
 # this function call itself" for the response the user reads, and two answers
 # that could disagree is worse than one import that looks upside down.
-from app.services.analyzer import _LOOP_TYPES, _function_name, _is_recursive
+from app.services.analyzer import _CONDITION_TYPES, _LOOP_TYPES, _function_name, _is_recursive
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from tree_sitter import Node
@@ -66,6 +66,24 @@ _LOOP_CLAIM = re.compile(
 _RECURSION_CLAIM = re.compile(
     r"\b(recurse|recurses|recursed|recursing|recursion|recursive|recursively)\b"
     r"|\bcalls?\s+itself\b",
+    re.IGNORECASE,
+)
+
+#: Words that assert conditional branching or testing.
+_CONDITION_CLAIM = re.compile(
+    r"\b(checks?|tests?)\s+(whether|if)\b|\bif\s+.*\b(then|otherwise|returns?)\b",
+    re.IGNORECASE,
+)
+
+#: Explicit claims that a line is an outer or inner loop header.
+_LOOP_HEADER_CLAIM = re.compile(
+    r"^\s*(outer|inner)\s+loop\b|\b(outer|inner)\s+loop\s*[:—\-]",
+    re.IGNORECASE,
+)
+
+#: Action claims of looping or iterating over data.
+_LOOP_ACTION_CLAIM = re.compile(
+    r"^\s*(loop|loops|iterate|iterates|repeat|repeats|traverse|traverses)\s+(over|through|across|until)\b",
     re.IGNORECASE,
 )
 
@@ -122,6 +140,8 @@ class _Scope:
     words: frozenset[str]
     has_loop: bool
     has_self_call: bool
+    has_condition: bool
+    start_line: int
 
 
 def validate(code: str, anchors: list[Anchor]) -> ValidationReport:
@@ -138,13 +158,13 @@ def validate(code: str, anchors: list[Anchor]) -> ValidationReport:
         # function's extent, which every rule here depends on.
         return ValidationReport(anchors=list(anchors))
 
-    by_line, whole_file = _scopes(root, code)
+    by_line, whole_file, line_statements = _scopes(root, code)
 
     kept: list[Anchor] = []
     rejections: list[Rejection] = []
     for anchor in anchors:
         scope = by_line.get(anchor.line, whole_file)
-        reason = _refutation(anchor.comment, scope)
+        reason = _refutation(anchor, scope, line_statements)
         if reason is None:
             kept.append(anchor)
         else:
@@ -153,18 +173,45 @@ def validate(code: str, anchors: list[Anchor]) -> ValidationReport:
     return ValidationReport(anchors=kept, rejections=rejections)
 
 
-def _refutation(comment: str, scope: _Scope) -> tuple[str, str] | None:
-    """Return the rule that refutes ``comment``, or ``None`` if none does.
+def _refutation(
+    anchor: Anchor, scope: _Scope, line_statements: dict[int, set[str]]
+) -> tuple[str, str] | None:
+    """Return the rule that refutes ``anchor.comment``, or ``None`` if none does.
 
-    :param comment: the generated comment text.
+    :param anchor: the checked anchor.
     :param scope: facts about the function the comment is anchored inside.
+    :param line_statements: AST node types of statements starting on each line.
     :return: ``(rule name, human-readable detail)``, or ``None`` to keep it.
     """
+    comment = anchor.comment
+    line = anchor.line
+
     if not scope.has_loop and _LOOP_CLAIM.search(comment):
         return "loop", f"claims repetition, but {scope.where} contains no loop"
 
+    if not scope.has_condition and _CONDITION_CLAIM.search(comment):
+        return "condition", f"claims branching, but {scope.where} contains no conditional statement"
+
     if not scope.has_self_call and _RECURSION_CLAIM.search(comment):
         return "recursion", f"claims recursion, but {scope.where} calls nothing of its own name"
+
+    # Line-level statement checks (only for statements inside function body,
+    # leaving the function's signature line eligible for function-level summaries).
+    if line > scope.start_line:
+        stmts = line_statements.get(line, set())
+        has_loop_stmt = any(s in _LOOP_TYPES for s in stmts)
+
+        # 1. Explicit claim of being an outer/inner loop on a line that starts no loop
+        if _LOOP_HEADER_CLAIM.search(comment) and not has_loop_stmt:
+            return "statement", f"claims loop header on line {line}, which is not a loop statement"
+
+        # 2. Claim of looping/iterating over data attached directly to a return or break statement
+        if any(s in {"return_statement", "break_statement"} for s in stmts) and not has_loop_stmt:
+            if _LOOP_ACTION_CLAIM.search(comment) or _LOOP_HEADER_CLAIM.search(comment):
+                return (
+                    "statement",
+                    f"claims iteration on line {line}, which is a return or break statement",
+                )
 
     cited = sorted(name for name in _cited_names(comment) if name not in scope.words)
     if cited:
@@ -191,8 +238,19 @@ def _cited_names(comment: str) -> set[str]:
     return {name for name in names if len(name) >= _MIN_CITED_NAME}
 
 
-def _scopes(root: Node, code: str) -> tuple[dict[int, _Scope], _Scope]:
-    """Map every line covered by a function to that function's facts.
+_STATEMENT_TYPES = _LOOP_TYPES | _CONDITION_TYPES | {
+    "return_statement",
+    "break_statement",
+    "continue_statement",
+    "declaration",
+    "expression_statement",
+}
+
+
+def _scopes(
+    root: Node, code: str
+) -> tuple[dict[int, _Scope], _Scope, dict[int, set[str]]]:
+    """Map every line covered by a function to that function's facts and statement types.
 
     Why smallest span wins: a method body sits inside a ``class_specifier``
     whose own lines are not the method's, and a line claimed by two functions
@@ -200,8 +258,7 @@ def _scopes(root: Node, code: str) -> tuple[dict[int, _Scope], _Scope]:
 
     :param root: the parsed syntax-tree root.
     :param code: the source the tree was built from.
-    :return: ``(line -> scope, whole-file scope)``; the second is the fallback
-        for lines outside every function, such as a member declaration.
+    :return: ``(line -> scope, whole-file scope, line -> statement_types)``.
     """
     functions = list(cpp_parser.iter_descendants(root, {"function_definition"}))
 
@@ -210,13 +267,20 @@ def _scopes(root: Node, code: str) -> tuple[dict[int, _Scope], _Scope]:
         words=frozenset(_WORD.findall(code)),
         has_loop=any(True for _ in cpp_parser.iter_descendants(root, _LOOP_TYPES)),
         has_self_call=any(_is_recursive(fn, _function_name(fn)) for fn in functions),
+        has_condition=any(True for _ in cpp_parser.iter_descendants(root, _CONDITION_TYPES)),
+        start_line=1,
     )
+
+    line_statements: dict[int, set[str]] = {}
+    for stmt in cpp_parser.iter_descendants(root, _STATEMENT_TYPES):
+        line_statements.setdefault(stmt.start_point[0] + 1, set()).add(stmt.type)
 
     by_line: dict[int, _Scope] = {}
     # Widest first, so an inner function overwrites the outer one's claim.
     for fn in sorted(functions, key=lambda node: node.end_byte - node.start_byte, reverse=True):
         name = _function_name(fn)
         body: Node | None = fn.child_by_field_name("body")
+        start_line = fn.start_point[0] + 1
         scope = _Scope(
             where=f"{name}()" if name else "the enclosing function",
             words=frozenset(_WORD.findall(cpp_parser.node_text(fn))),
@@ -225,8 +289,14 @@ def _scopes(root: Node, code: str) -> tuple[dict[int, _Scope], _Scope]:
                 and any(True for _ in cpp_parser.iter_descendants(body, _LOOP_TYPES))
             ),
             has_self_call=_is_recursive(fn, name),
+            has_condition=(
+                body is not None
+                and any(True for _ in cpp_parser.iter_descendants(body, _CONDITION_TYPES))
+            ),
+            start_line=start_line,
         )
-        for line in range(fn.start_point[0] + 1, fn.end_point[0] + 2):
+        for line in range(start_line, fn.end_point[0] + 2):
             by_line[line] = scope
 
-    return by_line, whole_file
+    return by_line, whole_file, line_statements
+
