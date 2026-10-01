@@ -36,6 +36,7 @@ let validatedCode = null;
 let validationVersion = 0;
 let validationTimer;
 let errorLine = null;
+let currentFix = null;
 
 function canAnalyze() {
   return !busy && validatedCode !== null && validatedCode === $('code').value;
@@ -48,8 +49,68 @@ function showValidation(state, title, message, line = null) {
   $('code').setAttribute('aria-invalid', String(state === 'invalid'));
   $('validation-retry').hidden = state !== 'unavailable';
   $('go-to-error').hidden = line === null;
+  $('preview-fix').hidden = !currentFix;
   errorLine = line;
   $('analyze-button').disabled = !canAnalyze();
+  if ($('optimize-button')) $('optimize-button').disabled = !canAnalyze();
+}
+
+function isFixPayload(fix) {
+  return Boolean(fix) && typeof fix.code === 'string' && Array.isArray(fix.edits);
+}
+
+function hideFixPreview() {
+  $('fix-preview').hidden = true;
+  $('fix-preview-diff').textContent = '';
+}
+
+function showFixPreview() {
+  if (!isFixPayload(currentFix)) return;
+  $('fix-preview-desc').textContent = typeof currentFix.description === 'string' ? currentFix.description : '';
+  const diff = $('fix-preview-diff');
+  diff.textContent = '';
+  // Untrusted server text goes in as text nodes, never HTML.
+  for (const edit of currentFix.edits) {
+    const row = document.createElement('div');
+    row.className = 'fix-edit';
+    const number = document.createElement('span');
+    number.className = 'fix-edit-line';
+    number.textContent = String(edit.line);
+    row.appendChild(number);
+    const lines = document.createElement('div');
+    lines.className = 'fix-edit-lines';
+    if (typeof edit.before === 'string' && edit.before) {
+      const before = document.createElement('div');
+      before.className = 'fix-line before';
+      before.textContent = `- ${edit.before}`;
+      lines.appendChild(before);
+    }
+    if (typeof edit.after === 'string' && edit.after) {
+      const after = document.createElement('div');
+      after.className = 'fix-line after';
+      after.textContent = `+ ${edit.after}`;
+      lines.appendChild(after);
+    }
+    row.appendChild(lines);
+    diff.appendChild(row);
+  }
+  $('preview-fix').hidden = true;
+  $('fix-preview').hidden = false;
+}
+
+function applyFix() {
+  if (!isFixPayload(currentFix)) return;
+  const textarea = $('code');
+  textarea.focus();
+  textarea.select();
+  // insertText keeps the replacement on the undo stack; the direct
+  // assignment below is only the fallback when execCommand is unavailable.
+  let applied = false;
+  try { applied = document.execCommand('insertText', false, currentFix.code); } catch { applied = false; }
+  if (!applied || textarea.value !== currentFix.code) textarea.value = currentFix.code;
+  hideFixPreview();
+  updateEditor();
+  $('announcement').textContent = 'Suggested fix applied. Checking the code again.';
 }
 
 async function validateEditor(version) {
@@ -61,6 +122,7 @@ async function validateEditor(version) {
     if (version !== validationVersion) return;
     if (typeof data.valid !== 'boolean' || typeof data.message !== 'string') throw new Error('Invalid validation response');
     validatedCode = data.valid ? code : null;
+    currentFix = data.valid ? null : (isFixPayload(data.suggested_fix) ? data.suggested_fix : null);
     showValidation(data.valid ? 'valid' : 'invalid', data.valid ? 'Ready to analyze' : 'Check your C++ code', data.message, data.line ?? null);
   } catch {
     if (version !== validationVersion) return;
@@ -73,6 +135,9 @@ function scheduleValidation() {
   clearTimeout(validationTimer);
   const version = ++validationVersion;
   validatedCode = null;
+  // Any edit or re-check invalidates a fix proposed for the previous text.
+  currentFix = null;
+  hideFixPreview();
   if (!$('code').value.trim()) {
     showValidation('empty', 'Start with C++', 'Write C++ code or load an example. Analyze unlocks when the syntax check passes.');
     return;
@@ -86,6 +151,9 @@ function scheduleValidation() {
 }
 
 $('validation-retry').addEventListener('click', scheduleValidation);
+$('preview-fix').addEventListener('click', showFixPreview);
+$('cancel-fix').addEventListener('click', () => { hideFixPreview(); if (currentFix) $('preview-fix').focus(); });
+$('apply-fix').addEventListener('click', applyFix);
 $('go-to-error').addEventListener('click', () => {
   const lines = $('code').value.split('\n');
   const lineIndex = Math.min(lines.length - 1, Math.max(0, errorLine - 1));
@@ -146,7 +214,12 @@ $('example').addEventListener('change', () => {
   $('code').focus();
   $('example').value = '';
 });
-$('clear').addEventListener('click', () => { $('code').value = ''; updateEditor(); $('code').focus(); });
+$('clear').addEventListener('click', () => {
+  $('code').value = '';
+  updateEditor();
+  $('code').focus();
+  if ($('optimization-section')) $('optimization-section').hidden = true;
+});
 document.addEventListener('keydown', (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !busy) {
     event.preventDefault();
@@ -191,7 +264,37 @@ async function runAnalysis() {
     // Model output and source code are untrusted text, never HTML.
     $('explanation').textContent = data.explanation || 'No explanation was returned for this snippet.';
     $('commented-code').textContent = data.commented_code || 'No commented code was returned.';
-    $('raw-response').textContent = JSON.stringify(data, null, 2);
+
+    const optChecked = $('include-optimization') && $('include-optimization').checked;
+    if (optChecked) {
+      try {
+        $('loading-message').textContent = 'Generating iterative loop optimization…';
+        const optData = await request('/optimize', { code: submittedCode, source: 'web', mode: 'loop' }, 600000);
+        result.optimization = optData;
+        if (optData.code && optData.changed) {
+          $('optimized-code').textContent = optData.code;
+          $('optimization-note').textContent = optData.note || (optData.verified ? 'Verified: identical output on test inputs.' : 'Loop rewrite generated by model.');
+          $('optimization-badge').hidden = false;
+          if (optData.verified) {
+            $('optimization-badge').textContent = optData.speedup > 1.0 ? `Verified ${optData.speedup}x faster` : 'Verified equivalent';
+            $('optimization-badge').className = 'result-badge';
+          } else {
+            $('optimization-badge').textContent = 'Candidate (unverified)';
+            $('optimization-badge').className = 'result-badge review';
+          }
+          $('optimization-section').hidden = false;
+        } else {
+          $('optimization-section').hidden = true;
+        }
+      } catch (optErr) {
+        console.warn('Optimization error:', optErr);
+        $('optimization-section').hidden = true;
+      }
+    } else {
+      $('optimization-section').hidden = true;
+    }
+
+    $('raw-response').textContent = JSON.stringify(result, null, 2);
     $('review-notice').hidden = !data.needs_review;
     $('result-badge').textContent = data.needs_review ? 'Review needed' : 'Complete';
     $('result-badge').classList.toggle('review', data.needs_review);
@@ -211,6 +314,83 @@ async function runAnalysis() {
     $('loading-state').hidden = true;
     $('analyze-button').disabled = !canAnalyze();
     $('analyze-button').textContent = 'Analyze code →';
+    if ($('optimize-button')) {
+      $('optimize-button').disabled = !canAnalyze();
+      $('optimize-button').textContent = 'Optimize to loop ⚡';
+    }
+    document.querySelector('.results-panel').setAttribute('aria-busy', 'false');
+  }
+}
+
+async function runOptimization() {
+  if (!canAnalyze()) return;
+  busy = true;
+  submittedCode = $('code').value;
+  submittedLanguage = $('output-language').value;
+  $('analyze-button').disabled = true;
+  if ($('optimize-button')) {
+    $('optimize-button').disabled = true;
+    $('optimize-button').textContent = 'Optimizing…';
+  }
+  $('empty-state').hidden = $('error-state').hidden = $('result-content').hidden = $('result-badge').hidden = true;
+  $('loading-state').hidden = false;
+  document.querySelector('.results-panel').setAttribute('aria-busy', 'true');
+  $('result-meta').textContent = 'Converting recursion to loop';
+  $('announcement').textContent = 'Optimization started.';
+  const started = performance.now();
+  $('loading-message').textContent = 'The model is analyzing recursion and rewriting to an iterative loop / DP table…';
+  const timer = setInterval(() => {
+    $('loading-message').textContent = `Still working · ${Math.floor((performance.now() - started) / 1000)} seconds elapsed.`;
+  }, 1000);
+
+  try {
+    const data = await request('/optimize', { code: submittedCode, source: 'web', mode: 'loop' }, 600000);
+    result = data;
+    $('raw-response').textContent = JSON.stringify(data, null, 2);
+
+    if (data.code && data.changed) {
+      $('optimized-code').textContent = data.code;
+      $('optimization-note').textContent = data.note || (data.verified ? 'Verified: identical output on test inputs.' : 'Loop rewrite generated by model.');
+      $('optimization-badge').hidden = false;
+      if (data.verified) {
+        $('optimization-badge').textContent = data.speedup > 1.0 ? `Verified ${data.speedup}x faster` : 'Verified equivalent';
+        $('optimization-badge').className = 'result-badge';
+      } else {
+        $('optimization-badge').textContent = 'Candidate (unverified)';
+        $('optimization-badge').className = 'result-badge review';
+      }
+      $('optimization-section').hidden = false;
+      $('explanation').textContent = `Recursion to Loop Optimization:\n• Algorithm converted to iterative execution.\n• Status: ${data.verified ? 'Verified mathematically equivalent on test inputs' : 'Generated model candidate'}\n• Note: ${data.note || 'Loop conversion'}`;
+      $('commented-code').textContent = data.code;
+    } else {
+      $('optimization-section').hidden = true;
+      $('explanation').textContent = data.note ? `No rewrite applied: ${data.note}` : 'The model did not suggest an iterative loop transformation for this snippet.';
+      $('commented-code').textContent = submittedCode;
+    }
+
+    $('review-notice').hidden = !data.changed || data.verified;
+    $('result-badge').textContent = data.verified ? 'Complete' : (data.changed ? 'Candidate' : 'Unchanged');
+    $('result-badge').classList.toggle('review', !data.verified && data.changed);
+    $('result-badge').hidden = false;
+    $('result-meta').textContent = `Loop optimization · ${((performance.now() - started) / 1000).toFixed(1)}s`;
+    $('result-content').hidden = false;
+    updateStale();
+    $('announcement').textContent = 'Optimization complete. Result is ready.';
+  } catch (error) {
+    $('error-state').hidden = false;
+    $('error-heading').textContent = 'We couldn’t finish the optimization.';
+    $('error-message').textContent = error.message;
+    $('result-meta').textContent = 'Optimization not completed';
+  } finally {
+    clearInterval(timer);
+    busy = false;
+    $('loading-state').hidden = true;
+    $('analyze-button').disabled = !canAnalyze();
+    $('analyze-button').textContent = 'Analyze code →';
+    if ($('optimize-button')) {
+      $('optimize-button').disabled = !canAnalyze();
+      $('optimize-button').textContent = 'Optimize to loop ⚡';
+    }
     document.querySelector('.results-panel').setAttribute('aria-busy', 'false');
   }
 }
@@ -278,7 +458,16 @@ function bindCopyButton(buttonId, getTextFn, defaultLabel) {
 
 bindCopyButton('copy-explanation', () => result?.explanation || $('explanation').textContent, 'Copy');
 bindCopyButton('copy-code', () => result?.commented_code || $('commented-code').textContent, 'Copy code');
+bindCopyButton('copy-optimized-code', () => $('optimized-code').textContent, 'Copy code');
 bindCopyButton('copy-api-response', () => (result ? JSON.stringify(result, null, 2) : $('raw-response').textContent), 'Copy');
+
+if ($('optimize-button')) {
+  $('optimize-button').addEventListener('click', (event) => {
+    event.preventDefault();
+    if (!canAnalyze()) return;
+    runOptimization();
+  });
+}
 
 
 async function checkService() {

@@ -18,7 +18,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-MODEL="${LLAMA_MODEL_PATH:-models/gguf/qwen-cpp-review-v3-q4_k_m.gguf}"
+MODEL="${LLAMA_MODEL_PATH:-models/gguf/qwen-cpp-review-q4_k_m.gguf}"
 PORT="${LLAMA_PORT:-8081}"
 THREADS="${LLAMA_THREADS:-8}"
 CONTEXT="${LLAMA_CONTEXT:-4096}"

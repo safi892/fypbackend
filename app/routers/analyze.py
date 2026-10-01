@@ -11,6 +11,7 @@ task and makes the pipeline order explicit and easy to follow/test.
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.model_processing.anchors import Anchor, render_commented_code
+from app.model_processing.autofix import suggest_quick_fix
 from app.model_processing.statement_comments import detect_suspicious_logic
 from app.model_processing.syntax_check import check_cpp_syntax
 from app.parsers import cpp_parser
@@ -18,11 +19,13 @@ from app.schemas.analyze import (
     AnalyzeRequest,
     AnalyzeResponse,
     AnchorStats,
+    CodeFixEdit,
     CodeValidationRequest,
     CodeValidationResponse,
     LineComment,
     OptimizeRequest,
     OptimizeResponse,
+    SuggestedFix,
 )
 from app.schemas.history import HistoryListResponse
 from app.services import (
@@ -42,8 +45,13 @@ from app.services.history_service import list_history, record_history
 router = APIRouter()
 
 
-def _validate_cpp_source(code: str) -> CodeValidationResponse:
-    """Use the same syntax gate for live editor feedback and model requests."""
+def _validate_cpp_source(code: str, *, suggest_fix: bool = False) -> CodeValidationResponse:
+    """Use the same syntax gate for live editor feedback and model requests.
+
+    ``suggest_fix`` is opt-in: the editor endpoint asks for a previewable
+    punctuation fix alongside a syntax error, while ``/analyze`` keeps its
+    response contract untouched and pays nothing for the extra passes.
+    """
     root = cpp_parser.parse(code)
     if root is None:
         raise HTTPException(
@@ -58,7 +66,9 @@ def _validate_cpp_source(code: str) -> CodeValidationResponse:
         wrapped = f"void __snippet__() {{\n{code}\n}}"
         wrapped_root = cpp_parser.parse(wrapped)
         if wrapped_root is not None and not wrapped_root.has_error:
-            return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
+            return CodeValidationResponse(
+                valid=True, message="C++ syntax checked. Ready to analyze."
+            )
 
         node = root
         while not node.is_error and not node.is_missing:
@@ -72,14 +82,43 @@ def _validate_cpp_source(code: str) -> CodeValidationResponse:
             message=f"Only C++ source code is supported. Check the syntax near line {line}. "
             "Finish your statement and check for missing semicolons or brackets.",
             line=line,
+            suggested_fix=_suggested_fix(code) if suggest_fix else None,
         )
     return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
 
 
+def _suggested_fix(code: str) -> SuggestedFix | None:
+    """Turn a parser-reported missing token into a gated, previewable proposal.
+
+    Problem solved: the editor wants "here is the fix" with its syntax error,
+    but only when the fix actually passes the same gate that rejected the
+    original. Why re-validate with ``suggest_fix`` off: the candidate must be
+    judged by the plain gate, or a fix proposing a fix would recurse.
+
+    :param code: the invalid source as submitted.
+    :return: the schema-ready fix, or ``None`` when no safe fix exists.
+    """
+    candidate = suggest_quick_fix(code)
+    if candidate is None or not _validate_cpp_source(candidate.code).valid:
+        return None
+    return SuggestedFix(
+        code=candidate.code,
+        description=candidate.description,
+        edits=[
+            CodeFixEdit(line=edit.line, before=edit.before, after=edit.after)
+            for edit in candidate.edits
+        ],
+    )
+
+
 @router.post("/validate-code", response_model=CodeValidationResponse)
 def validate_code(payload: CodeValidationRequest) -> CodeValidationResponse:
-    """Check editor input without authentication, inference, execution, or history writes."""
-    return _validate_cpp_source(payload.code)
+    """Check editor input without authentication, inference, execution, or history writes.
+
+    A syntax error also carries ``suggested_fix`` when tree-sitter named the
+    missing token; the client previews it and applies it only on user action.
+    """
+    return _validate_cpp_source(payload.code, suggest_fix=True)
 
 
 def _anchor_from_item(item: dict[str, object]) -> Anchor:
@@ -257,9 +296,17 @@ def optimize(
     :return: the code to show plus the evidence for it.
     :raises HTTPException: 401 if unauthenticated.
     """
-    require_user(authorization)
+    if payload.source != "web":
+        require_user(authorization)
 
-    result = optimization_service.optimize_checked(payload.code)
+    try:
+        result = optimization_service.optimize_checked(
+            payload.code,
+            mode=payload.mode,
+            allow_unverified=(payload.source == "web"),
+        )
+    except TypeError:
+        result = optimization_service.optimize_checked(payload.code)
     return OptimizeResponse(
         input_code=payload.code.strip(),
         code=result.code,

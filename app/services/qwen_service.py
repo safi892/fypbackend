@@ -67,6 +67,12 @@ TASK_INSTRUCTIONS = {
         "the results identical, and size any table from the arguments rather than a fixed "
         "constant. If there are no overlapping subproblems, return the code unchanged)"
     ),
+    "iterate": (
+        "Improved code (replace direct self-recursion with an iterative loop. For tail recursion or "
+        "single-branch recursion, update the arguments in a while loop; use an explicit "
+        "std::stack or std::queue only when traversal state really needs it. Keep the "
+        "signature and results identical, and do not leave any self-calls)"
+    ),
 }
 
 #: Appended to the describing tasks.
@@ -90,6 +96,7 @@ FIELD_FOR_TASK = {
     "line_comments": "line_comments",
     "explanation": "explanation",
     "optimize": "improved_code",
+    "iterate": "improved_code",
 }
 
 
@@ -276,6 +283,12 @@ def explain(code: str) -> str:
 def optimize(code: str) -> str:
     """Generate an optimised rewrite, or an empty string when none is offered."""
     value = _field(complete(build_prompt(code, "optimize")), "optimize")
+    return value if isinstance(value, str) else ""
+
+
+def iterate(code: str) -> str:
+    """Generate an iterative rewrite replacing recursion with a loop or stack."""
+    value = _field(complete(build_prompt(code, "iterate")), "iterate")
     return value if isinstance(value, str) else ""
 
 

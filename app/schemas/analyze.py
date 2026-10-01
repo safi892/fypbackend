@@ -21,10 +21,42 @@ class CodeValidationRequest(BaseModel):
     code: str = Field(..., max_length=100_000)
 
 
+class CodeFixEdit(BaseModel):
+    """One line-level before/after pair of a proposed fix.
+
+    Lines are numbered against the *submitted* code so a preview row points at
+    the user's own line; ``before`` is empty when the fix adds a line.
+    """
+
+    line: int = Field(..., ge=1, description="1-based line in the submitted code")
+    before: str = Field("", description="That line before the fix (empty for an added line)")
+    after: str = Field(..., description="That line after the fix")
+
+
+class SuggestedFix(BaseModel):
+    """A candidate punctuation fix, offered for preview and never auto-applied.
+
+    ``code`` is the full source after the fix; the client must show ``edits``
+    and apply it only on an explicit user action, because a fix that parses
+    can still change what the snippet means.
+    """
+
+    code: str = Field(..., description="The full source with the fix applied")
+    description: str = Field(..., description="One-line summary, e.g. the token and line")
+    edits: list[CodeFixEdit] = Field(
+        default_factory=list, description="Touched lines, for rendering the preview"
+    )
+
+
 class CodeValidationResponse(BaseModel):
     valid: bool
     message: str
     line: int | None = None
+    suggested_fix: SuggestedFix | None = Field(
+        None,
+        description="Parser-proposed fix when the code is invalid and a safe "
+        "punctuation fix exists; null otherwise. Preview only.",
+    )
 
 
 class AnalyzeRequest(BaseModel):
@@ -183,6 +215,7 @@ class OptimizeRequest(BaseModel):
     code: str = Field(..., min_length=1, description="Source code to optimize")
     source: str | None = Field(None, description="Client identifier, e.g. mobile")
     language: str = Field("cpp", description="Source language (currently cpp)")
+    mode: str = Field("auto", description="Optimization mode: auto | loop | dp")
 
 
 class OptimizeResponse(BaseModel):

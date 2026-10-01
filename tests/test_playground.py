@@ -59,3 +59,29 @@ def test_editor_validation_unavailable_and_size_limit(client, monkeypatch):
     monkeypatch.setattr(cpp_parser, "parse", lambda code: None)
     assert client.post("/validate-code", json={"code": "int x;"}).status_code == 503
     assert client.post("/validate-code", json={"code": "x" * 100001}).status_code == 422
+
+
+def test_validation_offers_a_previewable_fix_that_passes_the_same_gate(client):
+    code = "int main() {\n    return 0\n}"
+    data = client.post("/validate-code", json={"code": code}).json()
+    assert data["valid"] is False
+    assert data["line"] == 2
+    fix = data["suggested_fix"]
+    assert fix is not None
+    assert "return 0;" in fix["code"]
+    assert fix["edits"] == [{"line": 2, "before": "    return 0", "after": "    return 0;"}]
+    # The client only ever shows a proposal that the validator itself accepts.
+    assert client.post("/validate-code", json={"code": fix["code"]}).json()["valid"] is True
+
+
+def test_validation_offers_no_fix_when_there_is_none_to_trust(client):
+    # Valid code, non-C++, comment-only input, and ERROR-only shapes (where
+    # the parser named no missing token) all come back without a proposal.
+    for code in [
+        "int main() { return 0; }",
+        "def add(a, b):\n    return a + b",
+        "// Just a comment",
+        "int add(int a, int b) {\n    int c = a + b\n    return c;\n}",
+    ]:
+        data = client.post("/validate-code", json={"code": code}).json()
+        assert data["suggested_fix"] is None, code
