@@ -52,65 +52,94 @@ except subprocess.TimeoutExpired:
 That matters — one of the eight samples above ran forever. A rewrite that does
 not terminate must be a rejection, not an exception that reaches the client.
 
-## 3. Two defects in the verifier, found by running it
+## 3. Four defects in the verifier, found by running it — all now fixed
 
-These are the important part of this document, because a verifier that passes
-bad code is worse than no verifier: it converts "we don't know" into "verified".
+These are the important part of this document. A verifier that reports the
+wrong thing is worse than no verifier: it turns "we do not know" into a verdict.
 
-### 3a. Defaulted parameters are dropped, so they are never varied
+Three of the four made `check` blame **the user's code** for a limitation of the
+driver. One let a rewrite through that is wrong for every argument except the
+single value it was tested with.
 
-```cpp
-int f(int a[][5], int n, int x = 0) { ... return s + f(a, n, x + 1); }
-```
-
-```
-parse_signature -> 2 params: a, n          <- x is missing
-correctness inputs: ((), 0), ((7,), 1), ((1,2,3,4), 4), ...
-```
-
-`x` never appears, so every case runs with `x = 0`. One accepted rewrite used
-`i = x` where the original used `i = 0`. On the cases tried it agreed exactly;
-off them it does not:
+### 3a. The driver's result variable collided with the function's own name
 
 ```
-  x  n   original   candidate
-  0  5        132        132   same
-  1  5         90         50   DIFFERENT
-  2  5         90         22   DIFFERENT
+auto r = r(a0_0.data(), a0_1, a0_2);
+         ^ error: use of 'r' before deduction of 'auto'
 ```
 
-**`equivalence.check` would have called that rewrite equivalent and served it.**
+Single-letter names are the norm in these submissions, so a function called `r`
+could **never** be checked — and `check` returned `not verified: original
+compile failed`, which reads as a claim about the submission. Fixed by naming
+the result `a{index}_ret`, sharing the per-case prefix the argument locals
+already use.
 
-Fix in `_parse_signature_ast` / `_parse_signature_regex`: keep a parameter that
-has a default, record the default, and generate cases that use it *and* values
-either side of it. A defaulted parameter is still a parameter.
+**This was why the correct loop rewrite of the recursive max was rejected.** It
+now reports `equivalent on 5 inputs`.
 
-### 3b. Scalar parameters are filled without regard to the buffer they index
+### 3b. A multidimensional array was driven as a flat one
 
-```cpp
-int r(int a[], int l, int h)      // l and h are indices into a
 ```
+error: cannot convert 'int*' to 'int (*)[5]'
+```
+
+The driver backs every sequence with a `std::vector` and passes `.data()`, an
+`int*`. A parameter declared `int a[][5]` wants `int (*)[5]`. Fixed by making
+such a parameter **not drivable**, so the verdict names the real limit:
+
+```
+cannot check f(...): it takes a multidimensional array (a); the driver can
+only supply a flat sequence
+```
+
+Failing closed with an actionable reason is the correct behaviour. Supporting
+2-D arrays properly is a separate piece of work.
+
+### 3c. Defaulted parameters were dropped, so they were never varied
+
+Tree-sitter labels a parameter with a default `optional_parameter_declaration`,
+and the parser matched only `parameter_declaration`. So
+`int f(int a[][5], int n, int x = 0)` parsed as **two** parameters and every
+generated case ran with `x = 0`.
+
+This one is latent rather than observed on the submission above — that function
+is refused by §3b anyway — so it is demonstrated on a shape the driver can
+call. `tally(int a[], int n, int from = 0)` against a rewrite that ignores
+`from`: identical whenever `from` is 0, wrong everywhere else. Before the fix
+that was every case. `tests/test_optimization_verified.py` pins it.
+
+### 3d. Index scalars were filled as though they were lengths
 
 ```
 correctness inputs: ((), 0, 2), ((7,), 1, 2), ((1,2,3,4), 4, 2), ...
 ```
 
-The third case is `l = 4, h = 2` on a four-element array. `l >= h`, so the
-function returns `a[4]` — one past the end. The first case indexes an **empty**
-buffer. Both the original and the rewrite then read out of bounds, and the
-comparison is between two pieces of undefined behaviour: they may agree, and
-agreement means nothing.
+The rule was "an integer following a sequence is that sequence's length", which
+is right for `f(arr, n)` and wrong for `r(arr, l, h)`. The third case is
+`l = 4, h = 2` on a four-element array, so the function returns `a[4]`; the
+first indexes an **empty** sequence. Both versions then read out of bounds and
+the comparison is between two undefined behaviours, which can agree and mean
+nothing.
 
-Fix in `_fill`: when a scalar parameter is used as an index into a buffer
-parameter, bound it by that buffer's length. The cheap version is a name
-heuristic (`l`, `r`, `lo`, `hi`, `low`, `high`, `left`, `right`, `start`,
-`end`, `i`, `j`, `n`, `size`, `len`) clamped to `[0, len)`; the correct version
-asks `cpp_parser` which parameters appear inside a subscript expression on
-another parameter. Either way, a case that indexes out of bounds should be
-discarded rather than compared.
+Fixed by reading the name: length-ish names still take the sequence length,
+low-index names start inside it, high-index names take the last valid
+subscript, and the empty case is dropped for signatures that index. Now:
 
-Until one of these is fixed, treat `verified: true` on any function taking both
-a buffer and index scalars as unproven.
+```
+((7,), 0, 0)   ((1,2,3,4), 1, 3)   ((4,3,2,1), 0, 3)   ((5,1,5,1,5), 2, 4)
+```
+
+**The fix had the same shape as the bug on the first attempt.** Pinning low
+indices to `0` would mean a parameter named `from` or `start` takes one value in
+every case — untested for exactly the reason §3c was untested. Low indices now
+vary across the case list, and a test asserts they do.
+
+Two limits worth stating. The name heuristic is a heuristic: a parameter called
+`l` that is not an index gets a small in-range value, which is harmless, but an
+index called something unexpected still gets the length. Reading which
+parameters appear inside a subscript expression via `cpp_parser` would settle
+it. And verification proves equivalence **on the inputs tried**, never in
+general — which is the whole reason every parameter has to vary.
 
 ## 4. The pipeline to build
 
@@ -239,11 +268,11 @@ argument for never skipping it.
 
 ## 6. Order of work
 
-1. **Fix §3a and §3b.** Until then `verified: true` is not trustworthy, and
-   every later step inherits that.
+1. ~~Fix the verifier.~~ **Done** — all four defects in §3, with tests.
 2. **Add Step 5**, the did-it-do-the-task check. Cheap, and it removes the
-   largest class of useless "optimisations".
-3. **Add Step 3**, include repair. One function, rescues a third of candidates.
+   largest class of useless "optimisations": four of eight samples ran
+   correctly while still containing the self-call.
+3. **Add Step 3**, include repair. One function, rescued a third of candidates.
 4. **Add Step 2**, best-of-8. This is what turns the feature on.
 5. **Add Step 1**, routing, and the two measured wordings from the training
    repo's `prompt.py`.

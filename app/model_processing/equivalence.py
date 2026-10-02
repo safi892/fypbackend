@@ -69,6 +69,13 @@ class Parameter:
     is_array: bool = False
     is_reference: bool = False
     is_const: bool = False
+    #: Declared array dimensions: 1 for ``int a[]``, 2 for ``int a[][5]``.
+    dimensions: int = 0
+    #: Source text of the default value, when the parameter has one. A
+    #: defaulted parameter is still a parameter: dropping it silently narrows
+    #: the inputs the driver varies, so a rewrite that is wrong for any value
+    #: but the default passes.
+    default: str | None = None
 
     @property
     def is_vector(self) -> bool:
@@ -109,7 +116,21 @@ class Parameter:
         return self.is_array or self.is_reference
 
     @property
+    def is_multidimensional(self) -> bool:
+        """``int a[][5]`` and friends, which the driver cannot supply.
+
+        The driver backs every sequence with a ``std::vector`` and passes
+        ``.data()``, which is an ``int*``. A parameter declared ``int a[][5]``
+        wants ``int (*)[5]``, so the generated program does not compile and the
+        verdict comes back "original compile failed" — a true statement about
+        the harness that reads as a statement about the user's code.
+        """
+        return self.dimensions > 1
+
+    @property
     def drivable(self) -> bool:
+        if self.is_multidimensional:
+            return False
         return self.element_type in SCALAR_TYPES or self.is_string
 
 
@@ -215,9 +236,16 @@ def _parse_signature_ast(code: str) -> Signature | None:
         params: list[Parameter] = []
         if params_node:
             for p in params_node.children:
-                if p.type != "parameter_declaration":
+                # `optional_parameter_declaration` is how Tree-sitter labels a
+                # parameter that has a default. Matching only
+                # `parameter_declaration` dropped it, so `f(int a[][5], int n,
+                # int x = 0)` parsed as two parameters and every generated case
+                # ran with x = 0.
+                if p.type not in ("parameter_declaration", "optional_parameter_declaration"):
                     continue
                 p_text = cpp_parser.node_text(p)
+                default_node = p.child_by_field_name("default_value")
+                p_default = cpp_parser.node_text(default_node) if default_node else None
                 is_const = "const" in p_text.split()
                 is_array = "[" in p_text
                 is_reference = "&" in p_text or "*" in p_text
@@ -244,6 +272,8 @@ def _parse_signature_ast(code: str) -> Signature | None:
                         is_array=is_array,
                         is_reference=is_reference,
                         is_const=is_const,
+                        dimensions=p_text.count("["),
+                        default=p_default,
                     )
                 )
 
@@ -263,6 +293,11 @@ def _parse_signature_regex(code: str) -> Signature | None:
         if raw and raw != "void":
             for piece in _split_params(raw):
                 piece = piece.strip()
+                piece_default: str | None = None
+                if "=" in piece:
+                    piece, _, piece_default = piece.partition("=")
+                    piece, piece_default = piece.strip(), piece_default.strip() or None
+                dimensions = piece.count("[")
                 is_array = "[" in piece
                 is_reference = "&" in piece or "*" in piece
                 is_const = bool(re.match(r"\bconst\b", piece))
@@ -277,6 +312,8 @@ def _parse_signature_regex(code: str) -> Signature | None:
                         is_array=is_array,
                         is_reference=is_reference,
                         is_const=is_const,
+                        dimensions=dimensions,
+                        default=piece_default,
                     )
                 )
         return Signature(match.group("ret").strip(), name, tuple(params))
@@ -352,10 +389,20 @@ def _render_case(signature: Signature, values: tuple[Value, ...], index: int) ->
             label.append(str(value))
 
     call = f"{signature.name}({', '.join(arguments)})"
-    lines = [*setup, f"    auto r = {call};" if signature.returns_value else f"    {call};"]
+    # The result variable shares the per-case prefix with the argument locals
+    # rather than being called `r`. A function named `r` - and single letters
+    # are the norm in the submissions this serves - produced
+    # `auto r = r(...)`, which is "use of 'r' before deduction of 'auto'": the
+    # verifier could never check it, and reported the user's own code as the
+    # thing that failed to compile.
+    returned = f"a{index}_ret"
+    lines = [
+        *setup,
+        f"    auto {returned} = {call};" if signature.returns_value else f"    {call};",
+    ]
     lines.append(f'    std::cout << "{" | ".join(label)}" << " => ";')
     if signature.returns_value:
-        lines.append('    std::cout << r << " ; ";')
+        lines.append(f'    std::cout << {returned} << " ; ";')
     # After the call, deliberately: before it, these are the inputs.
     for position, parameter in enumerate(signature.params):
         if not parameter.is_output:
@@ -417,8 +464,37 @@ BUFFER_CASES: tuple[tuple[int, ...], ...] = (
 STRING_CASES: tuple[str, ...] = ("", "a", "abc", "racecar", "Hello World", "aabbcc")
 
 
+#: Scalar names that mean "how many", and the two halves of "where". An index
+#: filled as though it were a length reads past the end: for
+#: `r(int a[], int l, int h)` the old rule gave `l = len(a)`, so a four-element
+#: array was called with `l = 4` and the function returned `a[4]`. Both versions
+#: then read out of bounds and the comparison comes down to whatever happened to
+#: be in memory, which can agree and mean nothing.
+_LENGTH_NAMES = frozenset({"n", "m", "size", "len", "length", "count", "num", "sz", "total"})
+_LOW_NAMES = frozenset({"l", "lo", "low", "left", "start", "begin", "first", "from", "i"})
+_HIGH_NAMES = frozenset({"h", "hi", "high", "right", "end", "last", "to", "j"})
+
+
+def _indexes_a_sequence(signature: Signature) -> bool:
+    """Whether some scalar parameter is named like an index into a sequence."""
+    if not any(p.is_buffer or p.is_string for p in signature.params):
+        return False
+    return any(
+        p.name.lower() in (_LOW_NAMES | _HIGH_NAMES)
+        for p in signature.params
+        if not (p.is_buffer or p.is_string)
+    )
+
+
+#: How far into the sequence a low index starts, one entry per correctness case.
+#: Pinning a low index to 0 would repeat the bug this guards: a parameter named
+#: `from`, `start` or `l` would take one value in every case, so a rewrite that
+#: ignores it passes. Clamped against the sequence length at use.
+_LOW_OFFSETS: tuple[int, ...] = (0, 0, 1, 0, 2, 1)
+
+
 def _fill(
-    signature: Signature, buffer: tuple[int, ...], scalar: int, text: str
+    signature: Signature, buffer: tuple[int, ...], scalar: int, text: str, low: int = 0
 ) -> tuple[Value, ...]:
     """Build one argument tuple, sizing any length parameter from its sequence.
 
@@ -435,14 +511,23 @@ def _fill(
     """
     values: list[Value] = []
     previous_length: int | None = None
+    sequence_length: int | None = None
     for parameter in signature.params:
         if parameter.is_string:
             values.append(text)
-            previous_length = len(text)
+            previous_length = sequence_length = len(text)
         elif parameter.is_buffer:
             values.append(buffer)
-            previous_length = len(buffer)
-        elif previous_length is not None and parameter.element_type != "double":
+            previous_length = sequence_length = len(buffer)
+        elif parameter.element_type == "double":
+            values.append(scalar)
+        elif sequence_length is not None and parameter.name.lower() in _LOW_NAMES:
+            values.append(min(low, max(0, sequence_length - 1)))
+        elif sequence_length is not None and parameter.name.lower() in _HIGH_NAMES:
+            # The last valid subscript, not the length: a closed range is what
+            # `l`/`h` pairs mean in the submissions this serves.
+            values.append(max(0, sequence_length - 1))
+        elif previous_length is not None:
             values.append(previous_length)
             previous_length = None
         else:
@@ -460,9 +545,15 @@ def _cases(signature: Signature) -> tuple[list[tuple[Value, ...]], tuple[Value, 
     indistinguishable on four elements.
     """
     if any(p.is_buffer or p.is_string for p in signature.params):
-        small = [_fill(signature, b, 2, t) for b, t in zip(BUFFER_CASES, STRING_CASES, strict=True)]
+        triples = list(zip(BUFFER_CASES, STRING_CASES, _LOW_OFFSETS, strict=True))
+        if _indexes_a_sequence(signature):
+            # There is no valid subscript into an empty sequence, so the empty
+            # case would compare two undefined behaviours. It earns its place
+            # for every other shape and is dropped only here.
+            triples = [(b, s, low) for b, s, low in triples if b and s]
+        small = [_fill(signature, b, 2, t, low) for b, t, low in triples]
         large = tuple((index * 7919) % 2003 for index in range(1500))
-        return small, _fill(signature, large, 2, "abcdefghij" * 150)
+        return small, _fill(signature, large, 2, "abcdefghij" * 150, 0)
 
     width = len(signature.params)
     if width == 1:
@@ -498,6 +589,12 @@ def check(original: str, optimized: str, *, timeout: float = 20.0) -> Equivalenc
             )
         elif not signature.params:
             why = "it takes no arguments, so there is nothing to vary"
+        elif any(p.is_multidimensional for p in signature.params):
+            names = ", ".join(p.name for p in signature.params if p.is_multidimensional)
+            why = (
+                f"it takes a multidimensional array ({names}); the driver can only "
+                "supply a flat sequence"
+            )
         else:
             why = "its arguments are not shapes the driver can supply values for"
         return EquivalenceResult(reason=f"cannot check {signature.name}(...): {why}")
