@@ -7,7 +7,7 @@ and the model weights, neither of which pip can install.
 Check your work at any point with:
 
 ```bash
-curl -s localhost:8080/ready | python3 -m json.tool
+curl -s localhost:8000/ready | python3 -m json.tool
 ```
 
 It names what is missing rather than leaving you to infer it from a failed
