@@ -16,7 +16,11 @@ import logging
 import re
 from dataclasses import dataclass
 
-from app.core.config import MODEL_BACKEND, RAW_MAX_NEW_TOKENS, RAW_NUM_BEAMS
+from app.core import config as _config
+from app.core.config import RAW_MAX_NEW_TOKENS, RAW_NUM_BEAMS
+
+# Expose as a module-level name so tests can monkeypatch it cleanly.
+MODEL_BACKEND: str = _config.MODEL_BACKEND
 from app.model_processing import equivalence
 from app.schemas.analyze import StaticAnalysis
 from app.services.analyzer import analyze_code
