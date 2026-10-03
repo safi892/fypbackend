@@ -224,13 +224,20 @@ def render_commented_code(code: str, anchors: list[Anchor]) -> str:
         indent = line[: len(line) - len(line.lstrip())]
         for a in before_anchors:
             for comment_line in a.comment.strip().split("\n"):
-                comment_clean = comment_line.strip()
-                if not comment_clean:
+                comment_clean = comment_line.rstrip()
+                stripped = comment_clean.strip()
+                if not stripped:
                     continue
-                if comment_clean.startswith("//"):
-                    out.append(f"{indent}{comment_clean}")
+                if (
+                    stripped.startswith("//")
+                    or stripped.startswith("/*")
+                    or stripped.startswith("*")
+                    or stripped.startswith("*/")
+                ):
+                    lead = comment_line[: len(comment_line) - len(comment_line.lstrip())]
+                    out.append(f"{indent}{lead}{stripped}")
                 else:
-                    out.append(f"{indent}// {comment_clean}")
+                    out.append(f"{indent}// {stripped}")
 
         if inline_anchors:
             joined = "; ".join(a.comment.rstrip(" .") for a in inline_anchors)

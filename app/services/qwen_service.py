@@ -35,6 +35,7 @@ from app.core.config import (
 )
 from app.model_processing.anchors import Anchor, AnchorReport, render_commented_code, repair_anchors
 from app.model_processing.comment_validation import validate as validate_comments
+from app.model_processing.function_comments import attach_function_doc_comments
 from app.model_processing.statement_comments import CoutStatement, process_statement_comments
 from app.parsers.cpp_chunking import Chunk, chunk_code
 
@@ -305,6 +306,7 @@ def run(code: str) -> QwenOutput:
     """
     anchors, report, chunks = annotate(code)
     explanation = explain(code)
+    anchors = attach_function_doc_comments(code, anchors, explanation)
     LOGGER.info(
         "qwen backend: %d chunks, %d/%d anchors kept "
         "(%d exact, %d relocated, %d dropped, %d refuted by the tree)",
