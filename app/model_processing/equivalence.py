@@ -206,17 +206,32 @@ class EquivalenceResult:
 
 
 def _parse_signature_ast(code: str) -> Signature | None:
-    """Extract the first function signature using Tree-sitter C++ AST traversal.
+    """Extract the best function signature using Tree-sitter C++ AST traversal.
 
     Problem solved: regex signature matching breaks on modern C++ constructs
     (trailing return types, templates, complex qualifiers). Tree-sitter provides
     ground-truth structural parsing.
+
+    Why sort by start_byte: iter_descendants uses a LIFO stack, so children are
+    visited in reverse source order. Without sorting, the last function in the
+    file is returned first. Sorting by start_byte restores source order.
+
+    Why prefer drivable: a multi-function file where the first function takes
+    an undrivable type (e.g. int[][5]) should still be checkable via the next
+    drivable function. Fall back to the first function overall.
     """
     root = cpp_parser.parse(code)
     if root is None:
         return None
 
-    for fn in cpp_parser.iter_descendants(root, {"function_definition"}):
+    # Collect all function nodes sorted by their position in the source.
+    fn_nodes = sorted(
+        cpp_parser.iter_descendants(root, {"function_definition"}),
+        key=lambda n: n.start_byte,
+    )
+
+    all_sigs: list[Signature] = []
+    for fn in fn_nodes:
         decl = fn.child_by_field_name("declarator")
         while decl and decl.type in ("pointer_declarator", "reference_declarator"):
             decl = decl.child_by_field_name("declarator")
@@ -292,9 +307,16 @@ def _parse_signature_ast(code: str) -> Signature | None:
                     )
                 )
 
-        return Signature(ret.strip(), name.strip(), tuple(params))
+        all_sigs.append(Signature(ret.strip(), name.strip(), tuple(params)))
 
-    return None
+    # Prefer the first drivable function so a file where the leading function
+    # uses an undrivable type (e.g. int[][5]) doesn't block checking a later
+    # drivable one. Fall back to the first function overall.
+    for sig in all_sigs:
+        if sig.drivable:
+            return sig
+    return all_sigs[0] if all_sigs else None
+
 
 
 def _parse_signature_regex(code: str) -> Signature | None:
