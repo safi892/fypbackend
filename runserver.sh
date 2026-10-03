@@ -13,11 +13,27 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+
+# `.env` holds the model paths, and only the Python app read it: this script
+# computed its own default and looked for a file that is not there. Shell-safe
+# lines only (KEY=VALUE), and the environment still wins so a one-off override
+# on the command line keeps working.
+if [ -f .env ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in ''|'#'*) continue ;; esac
+    key="${key%"${key##*[![:space:]]}"}"
+    if [ -z "${!key:-}" ]; then export "$key=$value"; fi
+  done < .env
+fi
+
 PORT="${PORT:-8000}"
 MODEL_DIR="$ROOT/codet5_commenst_expla/checkpoint_best"
 
-export MODEL_PATH="$MODEL_DIR"
-export TOKENIZER_PATH="$MODEL_DIR"
+# Only the CodeT5 backend reads these, and it is no longer the default. They are
+# exported with `:-` so a value from .env or the caller is not overwritten by a
+# path to a checkpoint this repository does not ship.
+export MODEL_PATH="${MODEL_PATH:-$MODEL_DIR}"
+export TOKENIZER_PATH="${TOKENIZER_PATH:-$MODEL_DIR}"
 
 LOG_DIR="$ROOT/logs"
 LOG_FILE="$LOG_DIR/server.log"
@@ -87,9 +103,13 @@ start_server() {
 
   mkdir -p "$LOG_DIR"
 
-  if [ ! -d "$MODEL_DIR" ]; then
-    echo "Warning: model directory not found: $MODEL_DIR"
-    echo "The server will start but /analyze will return 503 until the model is present."
+  # Only warn about the CodeT5 checkpoint when CodeT5 is the backend actually
+  # selected. The default is qwen_gguf, which never loads that directory, so the
+  # old unconditional warning said /analyze would return 503 while /analyze was
+  # working - the kind of message that gets believed and then ignored.
+  if [ "${MODEL_BACKEND:-qwen_gguf}" = "codet5" ] && [ ! -d "$MODEL_DIR" ]; then
+    echo "Warning: MODEL_BACKEND=codet5 but its checkpoint is not here: $MODEL_DIR"
+    echo "/analyze will return 503 until it is, or set MODEL_BACKEND=qwen_gguf."
   fi
 
   local port_pids

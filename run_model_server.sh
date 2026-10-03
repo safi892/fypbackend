@@ -18,7 +18,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-MODEL="${LLAMA_MODEL_PATH:-models/gguf/qwen-cpp-review-q4_k_m.gguf}"
+# `.env` holds the model paths, and only the Python app read it: this script
+# computed its own default and looked for a file that is not there. Shell-safe
+# lines only (KEY=VALUE), and the environment still wins so a one-off override
+# on the command line keeps working.
+if [ -f .env ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in ''|'#'*) continue ;; esac
+    key="${key%"${key##*[![:space:]]}"}"
+    if [ -z "${!key:-}" ]; then export "$key=$value"; fi
+  done < .env
+fi
+
+# The default names the checkpoint that ships: five were trained and v3 is the
+# one measured as best. `.env` above overrides it when the weights live
+# elsewhere, which is how a machine short of disk points at one shared copy.
+MODEL="${LLAMA_MODEL_PATH:-models/gguf/qwen-cpp-review-v3-q4_k_m.gguf}"
 PORT="${LLAMA_PORT:-8081}"
 THREADS="${LLAMA_THREADS:-8}"
 CONTEXT="${LLAMA_CONTEXT:-4096}"

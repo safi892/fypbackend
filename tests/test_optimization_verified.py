@@ -12,7 +12,7 @@ import shutil
 
 import pytest
 
-from app.model_processing.equivalence import check, parse_signature
+from app.model_processing.equivalence import _cases, check, parse_signature
 from app.services import optimization_service
 
 needs_compiler = pytest.mark.skipif(shutil.which("c++") is None, reason="needs a C++ compiler")
@@ -209,3 +209,157 @@ def test_the_string_api_still_returns_something_compilable(monkeypatch):
 
     assert out.startswith(NAIVE)
     assert "optimizer:" in out
+
+
+# --- Four defects found by pointing the checker at real submissions ----------
+#
+# Each of these made the checker report something untrue: three made it blame
+# the user's code for a limitation of the driver, and one let a rewrite through
+# that is wrong for every argument except the one value it was tested with.
+
+RANGE_MAX = """int r(int a[], int l, int h) {
+    if (l >= h) return a[l];
+    int m = (l + h) / 2;
+    int x = r(a, l, m);
+    int y = r(a, m + 1, h);
+    return x > y ? x : y;
+}"""
+
+RANGE_MAX_AS_A_LOOP = """#include <stack>
+#include <algorithm>
+int r(int a[], int l, int h) {
+    int result = a[l];
+    std::stack<std::pair<int, int>> st;
+    st.push({l, h});
+    while (!st.empty()) {
+        auto [cl, ch] = st.top();
+        st.pop();
+        if (cl >= ch) result = std::max(result, a[cl]);
+        else {
+            int m = (cl + ch) / 2;
+            st.push({cl, m});
+            st.push({m + 1, ch});
+        }
+    }
+    return result;
+}"""
+
+#: Returns the first leaf it pops instead of comparing the halves.
+RANGE_MAX_BROKEN = """#include <stack>
+int r(int a[], int l, int h) {
+    std::stack<std::pair<int, int>> st;
+    st.push({l, h});
+    while (!st.empty()) {
+        auto [cl, ch] = st.top();
+        st.pop();
+        if (cl >= ch) return a[cl];
+        int m = (cl + ch) / 2;
+        st.push({cl, m});
+        st.push({m + 1, ch});
+    }
+    return 0;
+}"""
+
+TALLY_FROM = """int tally(int a[], int n, int from = 0) {
+    int s = 0;
+    for (int i = from; i < n; ++i) s += a[i];
+    return s;
+}"""
+
+#: Ignores `from`, so it agrees exactly when `from` is 0 and nowhere else.
+TALLY_IGNORING_THE_DEFAULT = """int tally(int a[], int n, int from = 0) {
+    int s = 0;
+    for (int i = 0; i < n; ++i) s += a[i];
+    return s;
+}"""
+
+
+def test_a_defaulted_parameter_is_still_a_parameter():
+    """Tree-sitter calls it `optional_parameter_declaration`, and it was skipped.
+
+    Dropping it left `f(int a[][5], int n, int x = 0)` looking like a
+    two-argument function, so every generated case ran with `x = 0`.
+    """
+    signature = parse_signature(TALLY_FROM)
+    assert [p.name for p in signature.params] == ["a", "n", "from"]
+    assert signature.params[-1].default == "0"
+
+
+def test_an_index_is_never_filled_past_the_end_of_what_it_indexes():
+    """`l` is an index, not a length.
+
+    The old rule read "an integer after a sequence is its length", so a
+    four-element array was called with `l = 4` and the function returned
+    `a[4]`. Both versions then read out of bounds, and two undefined behaviours
+    can agree without meaning anything.
+    """
+    signature = parse_signature(RANGE_MAX)
+    cases, _ = _cases(signature)
+    assert cases, "every case was discarded"
+    for buffer, low, high in cases:
+        assert buffer, "an empty sequence has no valid subscript"
+        assert 0 <= low < len(buffer)
+        assert 0 <= high < len(buffer)
+
+
+def test_a_low_index_is_not_pinned_to_one_value():
+    """Otherwise a rewrite that ignores it passes every case.
+
+    This is the same mistake as the one above wearing different clothes: a
+    parameter that takes a single value across the whole case list is not being
+    tested, whether that value came from the sequence length or from a constant.
+    """
+    signature = parse_signature(TALLY_FROM)
+    cases, _ = _cases(signature)
+    assert len({low for _, _, low in cases}) > 1
+
+
+def test_a_multidimensional_array_is_refused_by_name():
+    """The driver passes `vector<int>::data()`, an `int*`.
+
+    A parameter declared `int a[][5]` wants `int (*)[5]`, so the generated
+    program does not compile and the verdict used to read "original compile
+    failed" — a statement about the harness that the caller reads as a
+    statement about their own code.
+    """
+    code = "int f(int a[][5], int n) { return a[0][0] + n; }"
+    signature = parse_signature(code)
+    assert signature.params[0].dimensions == 2
+    assert not signature.drivable
+    result = check(code, "int f(int a[][5], int n) { return 0; }")
+    assert not result.verified
+    assert "multidimensional" in result.reason
+
+
+@needs_compiler
+def test_a_function_whose_name_collides_with_the_drivers_result_is_checkable():
+    """The driver used to write `auto r = r(...)`.
+
+    Single-letter names are the norm in these submissions, and a function named
+    `r` produced "use of 'r' before deduction of 'auto'" — so it could never be
+    checked, and the failure was reported against the user's code.
+    """
+    result = check(RANGE_MAX, RANGE_MAX_AS_A_LOOP)
+    assert result.verified, result.reason
+    assert result.equivalent, result.summary()
+
+
+@needs_compiler
+def test_the_broken_loop_rewrite_is_still_rejected():
+    """The fix must not turn into "accept everything"."""
+    result = check(RANGE_MAX, RANGE_MAX_BROKEN)
+    assert result.verified, result.reason
+    assert not result.equivalent
+
+
+@needs_compiler
+def test_a_rewrite_wrong_only_away_from_the_default_is_rejected():
+    """The defect this whole group exists for.
+
+    `TALLY_IGNORING_THE_DEFAULT` returns the same answer whenever `from` is 0.
+    While the defaulted parameter was invisible, that was every case, and the
+    rewrite was served as proven equivalent.
+    """
+    result = check(TALLY_FROM, TALLY_IGNORING_THE_DEFAULT)
+    assert result.verified, result.reason
+    assert not result.equivalent, "a rewrite that ignores `from` must not pass"
