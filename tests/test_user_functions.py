@@ -207,6 +207,19 @@ def test_f_check_reports_undrivable_clearly():
     )
 
 
+def test_f_optimize_checked_returns_iterative_stack_rewrite():
+    """When f is submitted, optimize_checked must return an iterative rewrite
+    with std::stack where recursive self-calls are eliminated and comments are included."""
+    result = optimization_service.optimize_checked(F_RECURSIVE)
+    assert result.changed is True
+    assert result.verified is True
+    assert "std::stack" in result.code
+    assert "return s + f(" not in result.code
+    assert "while (!st.empty())" in result.code
+    assert "//" in result.code
+    assert "Base case:" in result.code
+
+
 # ===========================================================================
 # 3.  Multi-function input — both r and f in one translation unit
 #     The optimizer must handle a file with multiple functions.

@@ -50,9 +50,8 @@ int add(int a, int b) {
                 <option value="roman_urdu">Roman Urdu</option>
               </select>
             </div>
-            <div class="run-actions" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <div class="run-actions">
               <button id="analyze-button" class="button primary" type="submit" disabled aria-describedby="validation-message">Analyze code <span aria-hidden="true">→</span></button>
-              <button id="optimize-button" class="button secondary" type="button" disabled title="Convert recursive functions to iterative loops">Optimize to loop ⚡</button>
             </div>
           </div>
           <div class="opt-toggle-row" style="padding: 0 24px 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
@@ -66,25 +65,24 @@ int add(int a, int b) {
       </section>
       <section class="results-panel" aria-labelledby="results-heading" aria-busy="false">
         <div class="panel-heading"><div><h2 id="results-heading">Make sense of your code</h2><span id="result-meta" class="muted">Your analysis will appear here.</span></div><span id="result-badge" class="result-badge" hidden>Complete</span></div>
-        <div id="empty-state" class="empty-state"><div class="empty-symbol" aria-hidden="true">{ <span>…</span> }</div><h3>From code to understanding.</h3><p>Add your C++ code and select <strong>Analyze code</strong> or <strong>Optimize to loop</strong>. Get a plain-language explanation, comments, and iterative rewrites alongside your source.</p><div class="output-preview"><span>Explanation</span><span>Commented code</span><span>Optimized loop</span></div></div>
+        <div id="empty-state" class="empty-state"><div class="empty-symbol" aria-hidden="true">{ <span>…</span> }</div><h3>From code to understanding.</h3><p>Add your C++ code and select <strong>Analyze code</strong>. Get a plain-language explanation, comments, and optional iterative rewrites alongside your source.</p><div class="output-preview"><span>Explanation</span><span>Code</span></div></div>
         <div id="loading-state" class="loading-state" hidden><div class="loading-label"><span class="spinner" aria-hidden="true"></span><h3>Reading your code…</h3></div><p id="loading-message">The model is preparing your explanation and comments.</p><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton short"></div><p class="muted">Longer snippets can take a few minutes.</p></div>
         <div id="error-state" class="error-state" role="alert" hidden><h3 id="error-heading">We couldn’t finish the analysis.</h3><p id="error-message"></p><p>Your code is still in the editor. You can try again.</p></div>
         <div id="result-content" hidden>
           <p id="stale-notice" class="notice" hidden>The code or language has changed. Analyze again to update these results.</p>
           <p id="review-notice" class="notice warning" hidden>Review recommended: some generated comments were rejected, or the output did not pass the syntax check. Check the result before using it.</p>
-          <div id="optimization-section" class="result-section" hidden>
+          <div class="result-section"><div class="section-heading"><h3>Explanation</h3><button id="copy-explanation" class="text-button copy-btn">Copy</button></div><div id="explanation" class="explanation"></div></div>
+          <div class="result-section">
             <div class="section-heading">
-              <h3>Optimized code (Recursion to loop)</h3>
+              <h3 id="code-heading">Commented code</h3>
               <div style="display: flex; align-items: center; gap: 8px;">
-                <span id="optimization-badge" class="result-badge" hidden>Verified faster</span>
-                <button id="copy-optimized-code" class="text-button copy-btn" type="button">Copy code</button>
+                <span id="optimization-badge" class="result-badge" hidden>Verified equivalent</span>
+                <button id="copy-code" class="text-button copy-btn">Copy code</button>
               </div>
             </div>
-            <p id="optimization-note" class="muted" style="margin: 0 0 10px; font-size: 13px;"></p>
-            <pre class="output-code" tabindex="0" aria-label="Optimized C++ code"><code id="optimized-code"></code></pre>
+            <p id="optimization-note" class="muted" style="margin: 0 0 10px; font-size: 13px;" hidden></p>
+            <pre class="output-code" tabindex="0" aria-label="C++ code"><code id="commented-code"></code></pre>
           </div>
-          <div class="result-section"><div class="section-heading"><h3>Explanation</h3><button id="copy-explanation" class="text-button copy-btn">Copy</button></div><div id="explanation" class="explanation"></div></div>
-          <div class="result-section"><div class="section-heading"><h3>Commented code</h3><button id="copy-code" class="text-button copy-btn">Copy code</button></div><pre class="output-code" tabindex="0" aria-label="Commented C++ code"><code id="commented-code"></code></pre></div>
           <details class="api-response-details"><summary>View API response</summary><button id="copy-api-response" class="text-button copy-btn">Copy</button><pre id="raw-response" tabindex="0"></pre></details>
         </div>
       </section>
