@@ -160,6 +160,7 @@ def test_a_rewrite_that_changes_the_answer_never_reaches_the_caller(monkeypatch)
     from app.services import qwen_service
 
     monkeypatch.setattr(qwen_service, "optimize", lambda code: WRONG)
+    monkeypatch.setattr(qwen_service, "iterate", lambda code: WRONG)
 
     result = optimization_service.optimize_checked(NAIVE)
 
@@ -175,6 +176,7 @@ def test_an_unavailable_model_server_returns_the_original(monkeypatch):
         raise qwen_service.LlamaServerUnavailable("connection refused")
 
     monkeypatch.setattr(qwen_service, "optimize", down)
+    monkeypatch.setattr(qwen_service, "iterate", down)
 
     result = optimization_service.optimize_checked(NAIVE)
 
@@ -188,6 +190,7 @@ def test_an_unverifiable_rewrite_never_reaches_the_caller(monkeypatch):
     original = "void go(int n) { int total = n + 1; }"
     proposal = "void go(int n) { int total = n; }"
     monkeypatch.setattr(qwen_service, "optimize", lambda code: proposal)
+    monkeypatch.setattr(qwen_service, "iterate", lambda code: proposal)
 
     result = optimization_service.optimize_checked(original)
 
@@ -203,6 +206,7 @@ def test_the_string_api_still_returns_something_compilable(monkeypatch):
     from app.services import qwen_service
 
     monkeypatch.setattr(qwen_service, "optimize", lambda code: "")
+    monkeypatch.setattr(qwen_service, "iterate", lambda code: "")
 
     out = optimization_service.optimize(NAIVE)
 

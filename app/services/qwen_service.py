@@ -68,10 +68,14 @@ TASK_INSTRUCTIONS = {
         "constant. If there are no overlapping subproblems, return the code unchanged)"
     ),
     "iterate": (
-        "Improved code (replace direct self-recursion with an iterative loop. For tail recursion or "
-        "single-branch recursion, update the arguments in a while loop; use an explicit "
-        "std::stack or std::queue only when traversal state really needs it. Keep the "
-        "signature and results identical, and do not leave any self-calls)"
+        "Improved code (convert ONLY the direct self-recursive call to an iterative loop. "
+        "Do NOT change any inner loops, arithmetic, or logic that is not part of the "
+        "recursive call. For a function that returns 's + f(a, n, x+1)': add an outer "
+        "for/while loop over the recursion variable (e.g. 'for (int x = 0; x < n; ++x)'), "
+        "accumulate into a running total, and remove the recursive call. For tail recursion "
+        "update the arguments in a while loop. Use std::stack only when the call tree truly "
+        "branches. Keep the signature and final result identical. The output must contain "
+        "zero self-calls to the function)"
     ),
 }
 
