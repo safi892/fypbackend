@@ -490,3 +490,131 @@ When explaining this project to anyone, remember these **5 core highlights**:
 
 #### Q17: What was the most challenging technical hurdle in this project?
 > **Answer:** Ensuring that AI comments never drifted from their corresponding code lines. Early iterations suffered from hallucinated line numbers. Designing the **Anchor Validation System**—where comments are strictly mapped to AST nodes and verified before rendering—completely eliminated hallucinated annotations and code corruption.
+
+---
+
+### Section G: Frontend-Backend Integration (Android & Web)
+
+#### Q18: How does the Android mobile client interact with the backend?
+> **Answer:** The Android app communicates via a typed **Retrofit 2** client (`CodeApiService.kt`) using OkHttp. It serializes data with Gson.
+> - For real-time editor feedback, debounced text changes call `POST /validate-code`.
+> - For code reviews, it calls `POST /analyze` or `POST /optimize`.
+> - If an authorization token exists in encrypted `SharedPreferences`, it attaches an `Authorization: Bearer <token>` header, allowing automatic history recording.
+
+#### Q19: Why does the mobile client redirect directly to `DocumentationScreen` instead of showing a bottom sheet modal?
+> **Answer:** In early designs, results were shown in a cramped modal bottom sheet. However, code review reports contain extensive data: multi-paragraph logic explanations, Doxygen documentation headers, and full C++ source files. Squeezing this into a modal sheet caused awkward nested scrolling and cut off code lines. Redirecting to `DocumentationScreen` provides a clean, web-style stacked view:
+> 1. Top metadata card with verification badges and speedup metrics.
+> 2. Segmented view tabs (Overview, Explanation, Code).
+> 3. Dedicated copy buttons for individual sections and the full report.
+> 4. An "Open in Code Editor" sticky action that seamlessly reloads the code back into the Sora IDE.
+
+#### Q20: How does real-time syntax checking work in the Android Sora editor without lagging the UI?
+> **Answer:** In `EditorScreen.kt`, typing triggers `ContentChangeEvent` on every keystroke. To prevent network spam and UI stuttering:
+> 1. Keystrokes emit into a `MutableSharedFlow` with `BufferOverflow.DROP_OLDEST`.
+> 2. A Kotlin Coroutines `debounce(250ms)` operator ensures network requests are only sent after the user pauses typing.
+> 3. It calls `POST /validate-code`, which uses Tree-sitter C++ AST parsing in sub-milliseconds without invoking the heavy LLM or touching the database.
+
+#### Q21: What is the purpose of the Web Playground (`GET /`) alongside the mobile API?
+> **Answer:** The web playground (`app/web/index.html`) serves as an immediate, browser-based workbench for rapid testing, debugging, and demonstration. It allows evaluators or developers to test code analysis and loop optimization without needing an Android emulator or device, while sharing the exact same FastAPI endpoints and validation logic.
+
+---
+
+### Section H: Compiler Parsing & Tree-sitter Edge Cases
+
+#### Q22: What happens if a user submits incomplete C++ code (e.g., just a function body without `#include` or `main`)?
+> **Answer:** In `_validate_cpp_source` (`app/routers/analyze.py`), if the submitted snippet fails top-level parsing because it is an isolated statement or body, the validator wraps it into a dummy harness:
+> ```cpp
+> void __snippet__() {
+>     <submitted_code>
+> }
+> ```
+> If the wrapped code parses without syntax errors, Tree-sitter marks it as valid C++. This allows users to analyze single algorithms or snippets without writing boilerplate `#include <iostream>` headers.
+
+#### Q23: How does Tree-sitter handle syntax errors while a user is actively typing?
+> **Answer:** Unlike standard compiler frontends that abort on the first error, Tree-sitter is an incremental, error-recovering parser designed for text editors. When it encounters incomplete tokens, it creates specialized `ERROR` or `MISSING` nodes in the AST while continuing to parse the rest of the file. This allows our backend to extract valid functions even if one line in the middle has a syntax error.
+
+#### Q24: What happens if the host server does NOT have `g++` or `clang++` installed? Does the entire API crash?
+> **Answer:** No. In `app/core/compiler.py`, the backend dynamically probes `PATH` for compilers. If none is found:
+> - Syntax checking falls back to the Tree-sitter AST parser.
+> - Code commenting and explanations continue functioning normally.
+> - In `/optimize`, the code rewrite is returned with `verified: false` and a note stating `"No C++ compiler available for formal equivalence proof"`.
+> The `/ready` probe flags `cpp_compiler` as `required: false` so the service remains operational.
+
+#### Q25: How do you handle large C++ files that exceed the model's context window?
+> **Answer:** We implemented AST-aware chunking in `app/parsers/cpp_chunking.py`. Instead of splitting text arbitrarily by character count (which would break functions in half and destroy context), the chunker traverses the AST and slices the code along top-level function and class boundaries. Each chunk is analyzed independently, and their anchor comments are recombined into the final file.
+
+---
+
+### Section I: Recursion-to-Loop Optimization Nuances
+
+#### Q26: Why do you isolate only the recursive function during `/optimize` instead of rewriting the entire file?
+> **Answer:** Real-world C++ files often contain multiple functions—some already optimal, some utility helpers, and a `main()` driver. Asking an AI or optimizer to rewrite the entire file increases the risk of unintended mutations or syntax breaks. By isolating the single recursive function (e.g., function `h`), we transform only that function into a loop, verify it, and splice it back into the untouched original code.
+
+#### Q27: Why doesn't the compiler's own `-O3` flag make your source-to-source recursion optimizer redundant?
+> **Answer:**
+> 1. **Compiler Limitations:** Standard C++ compilers (GCC/Clang) only optimize *Tail Recursion* (where the recursive call is the absolute last operation). They cannot automatically transform non-tail accumulator recursion (e.g., `return a[n-1] + h(a, n-1)`) into a loop without deep mathematical pattern recognition.
+> 2. **Pedagogical Value:** Our tool is educational. The developer sees the transformed, readable C++ loop code with explanatory comments, helping them learn how to write iterative accumulator algorithms.
+> 3. **Debuggability:** Debugging recursive stack traces in production is difficult. Iterative code simplifies profiling and prevents stack overflow crashes.
+
+#### Q28: How does `equivalence.py` generate test cases for differential testing?
+> **Answer:** It inspects the function's parameter types from the AST:
+> - For integer inputs (`int n`), it generates boundary values: `0`, `1`, small positives, negative edge cases, and random integers within safe bounds.
+> - For array inputs (`int a[], int n`), it generates arrays with distinct values, duplicates, sorted ascending/descending, and zeroed arrays.
+> Both original and optimized binaries are fed these identical vectors, and standard output (`stdout`) is asserted bitwise identical.
+
+#### Q29: What happens if the recursive function overflows integer bounds during differential testing?
+> **Answer:** The test harness in `equivalence.py` uses inputs constrained to prevent undefined integer overflow (e.g., limiting factorial inputs to $n \le 12$ for 32-bit signed integers). Furthermore, if either binary produces a segmentation fault or abnormal exit code, the differential test fails immediately, and the rewrite is rejected.
+
+---
+
+### Section J: LLM Quantization, Serving & Prompts
+
+#### Q30: What is GGUF and why is it superior to PyTorch checkpoints for this deployment?
+> **Answer:** **GGUF (GPT-Generated Unified Format)** is the binary format used by `llama.cpp`. Unlike PyTorch checkpoints that require heavy Python runtimes, CUDA dependencies, and gigabytes of dependencies, GGUF files:
+> - Are self-contained, single-file model binaries containing weights, tokenizer, and metadata.
+> - Support memory-mapping (`mmap`), allowing instant loading into memory without deserialization delays.
+> - Run with high CPU/Metal SIMD optimizations (AVX2, NEON) on standard consumer hardware.
+
+#### Q31: What does `Q4_K_M` quantization mean?
+> **Answer:**
+> - **Q4:** Quantizes 16-bit floating point weights down to 4-bit integers, reducing model size by ~70% (from ~4 GB down to ~0.95 GB).
+> - **K:** Uses k-quants (block-wise quantization), preserving higher precision for critical attention projection layers.
+> - **M (Medium):** A balanced quantization profile where half of the attention and feed-forward matrices use 4-bit while sensitive layers retain 5-bit or 6-bit precision, minimizing perplexity degradation.
+
+#### Q32: How do you force the local LLM to output valid JSON anchors without markdown chatter?
+> **Answer:**
+> 1. **Strict System Prompt:** Instructs the model to act solely as a JSON emitter, with explicit schemas and zero conversational filler.
+> 2. **Grammar Sampling / Format Anchors:** We enforce response prefixes (e.g., initiating output with `[`).
+> 3. **Output Repair:** `app/model_processing/repair.py` strips accidental markdown code fences (````json ... ````) and repairs minor JSON syntax discrepancies (trailing commas, escaped quotes) before parsing.
+
+#### Q33: How does the backend handle concurrent requests if the local model server is busy?
+> **Answer:** `llama-server` supports parallel context slots (`--parallel`). If all slots are occupied, incoming HTTP requests queue naturally. Furthermore, because static analysis and syntax validation run first in FastAPI, requests with invalid C++ are rejected immediately without ever reaching or consuming model inference slots.
+
+---
+
+### Section K: Roman Urdu Translation & Localization
+
+#### Q34: Why Roman Urdu instead of Arabic/Nastaliq Urdu script?
+> **Answer:** In South Asia (particularly Pakistan and India), software engineering students and developers predominantly communicate in **Roman Urdu** (Urdu written in the Latin/English alphabet) on mobile keyboards, WhatsApp, and developer forums. Standard Nastaliq script requires specialized font rendering and is rarely used for technical coding terminology.
+
+#### Q35: How do you prevent C++ keywords from being translated into Roman Urdu?
+> **Answer:** In `translation_service.py`, code identifiers, types (`int`, `void`, `float`), control structures (`for`, `while`, `return`), and quoted literals are masked with cryptographic placeholder tokens (e.g., `__CODE_TOKEN_0__`) before the translation pipeline runs. After the linguistic mapping is complete, the tokens are unmasked back to their exact original C++ representations.
+
+---
+
+### Section L: Database, Testing & Future Scope
+
+#### Q36: Why SQLite instead of PostgreSQL for this FYP?
+> **Answer:**
+> 1. **Zero-Configuration Portability:** SQLite is a serverless, single-file database (`app.db`), making the entire backend trivial to clone and run on any machine without provisioning database containers.
+> 2. **Performance:** For read-heavy personal review histories, SQLite's in-process C library delivers sub-millisecond query execution.
+> 3. **Concurrency Management:** We configure SQLite with Write-Ahead Logging (WAL mode) and connection timeout pooling in `app/core/database.py`, preventing database lock contention under multi-threaded FastAPI workers.
+
+#### Q37: How do your unit tests run fast in CI/CD without needing a GPU or the model server?
+> **Answer:** In `tests/conftest.py`, we implement mock fixtures for `model_service` and `qwen_service`. The test suite validates the full pipeline (AST extraction, anchor validation, differential testing, syntax checking, and API routing) using deterministic fixture outputs, completing all 12 test suites in under 5 seconds.
+
+#### Q38: What are the primary future enhancements for this project?
+> **Answer:**
+> 1. **Multi-File Project Analysis:** Expanding from single-file analysis to parsing complete CMake/Makefile projects with header graph dependencies.
+> 2. **Memory Safety Checks:** Integrating Clang Static Analyzer / AddressSanitizer (ASan) to detect dangling pointers, memory leaks, and buffer overflows.
+> 3. **Additional Languages:** Extending the AST parser and anchor validation to Python, Rust, and Java.
