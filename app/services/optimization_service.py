@@ -265,6 +265,69 @@ def _transform_accumulator_recursion(code: str) -> str | None:
     return "\n".join(lines)
 
 
+def _transform_linear_step_recursion(code: str) -> str | None:
+    """Transform direct step recursion like 'return n + f(n - 2);' or 'return n * f(n - 1);' into loops."""
+    m = re.search(
+        r"return\s+([A-Za-z_]\w*)\s*([\+\*])\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\s*-\s*(\d+)\s*\)\s*;",
+        code,
+    )
+    if not m:
+        m = re.search(
+            r"return\s+([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\s*-\s*(\d+)\s*\)\s*([\+\*])\s*([A-Za-z_]\w*)\s*;",
+            code,
+        )
+        if m:
+            fn_name = m.group(1)
+            rec_var = m.group(2)
+            step_k = int(m.group(3))
+            op = m.group(4)
+            term_var = m.group(5)
+        else:
+            return None
+    else:
+        term_var = m.group(1)
+        op = m.group(2)
+        fn_name = m.group(3)
+        rec_var = m.group(4)
+        step_k = int(m.group(5))
+
+    if term_var != rec_var:
+        return None
+
+    sig_m = re.search(
+        rf"\b[A-Za-z_]\w*[\s\*&]+\b{re.escape(fn_name)}\s*\(\s*int\s+{re.escape(rec_var)}\s*\)",
+        code,
+    )
+    if not sig_m:
+        return None
+    sig = sig_m.group(0).strip()
+
+    base_m = re.search(
+        rf"if\s*\(\s*{re.escape(rec_var)}\s*<=\s*(\d+)\s*\)\s*(?:return\s+([^;]+);|\{{\s*return\s+([^;]+);\s*\}})",
+        code,
+    )
+    if not base_m:
+        return None
+    base_bound = int(base_m.group(1))
+    base_ret = (base_m.group(2) or base_m.group(3)).strip()
+
+    init_val = "0" if op == "+" else "1"
+    op_assign = "+=" if op == "+" else "*="
+    ret_expr = f"total + {base_ret}" if op == "+" else f"total * {base_ret}"
+
+    lines = [
+        f"{sig} {{",
+        f"    int total = {init_val};",
+        f"    while ({rec_var} > {base_bound}) {{",
+        f"        total {op_assign} {rec_var};",
+        f"        {rec_var} -= {step_k};",
+        f"    }}",
+        f"    return {ret_expr};",
+        f"}}",
+    ]
+    return "\n".join(lines)
+
+
 def optimize_checked(
     code: str,
     mode: str = "auto",
@@ -334,11 +397,15 @@ def optimize_checked(
         proposal = _extract_code(raw)
 
     if not proposal or proposal.strip() == target_code.strip():
-        proposal = _transform_accumulator_recursion(target_code) or ""
+        proposal = (
+            _transform_linear_step_recursion(target_code)
+            or _transform_accumulator_recursion(target_code)
+            or ""
+        )
         if not proposal:
             return OptimizationResult(code=code, note="no rewrite was offered")
 
-    # If the proposal still left recursive self-calls, attempt accumulator transform fallback
+    # If the proposal still left recursive self-calls, attempt transform fallbacks
     fn_name = single_rec_target.name if single_rec_target else None
     if not fn_name:
         name_match = re.search(r"\b([A-Za-z_]\w*)\s*\(", target_code)
@@ -353,7 +420,10 @@ def optimize_checked(
             and not re.search(rf"^\s*\w[\w\s\*&<>,]*\b{re.escape(fn_name)}\s*\(", l)
         ]
         if len(call_lines) > 0:
-            fallback = _transform_accumulator_recursion(target_code)
+            fallback = (
+                _transform_linear_step_recursion(target_code)
+                or _transform_accumulator_recursion(target_code)
+            )
             if fallback:
                 proposal = fallback
 
@@ -399,6 +469,30 @@ def optimize_checked(
                 target_fn_name=target_fn_id,
             )
         return OptimizationResult(code=code, note=combined_note)
+
+    # If the model proposal was rejected by execution equivalence, try our deterministic transform fallbacks
+    for transform_fn in (_transform_linear_step_recursion, _transform_accumulator_recursion):
+        alt_candidate = transform_fn(target_code)
+        if alt_candidate and alt_candidate.strip() != target_code.strip():
+            if single_rec_target:
+                alt_full = "\n".join(
+                    lines[: single_rec_target.start_line - 1]
+                    + alt_candidate.splitlines()
+                    + lines[single_rec_target.end_line :]
+                )
+            else:
+                alt_full = alt_candidate
+            alt_verdict = equivalence.check(code, alt_full)
+            if alt_verdict.equivalent:
+                return OptimizationResult(
+                    code=alt_full,
+                    changed=True,
+                    verified=True,
+                    speedup=alt_verdict.speedup,
+                    note=alt_verdict.summary(),
+                    isolated_proposal=alt_candidate,
+                    target_fn_name=target_fn_id,
+                )
 
     LOGGER.warning("optimizer: rewrite rejected (%s)", verdict.summary())
     return OptimizationResult(code=code, note=verdict.summary())
