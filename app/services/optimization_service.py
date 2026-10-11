@@ -214,7 +214,6 @@ def _transform_accumulator_recursion(code: str) -> str | None:
         "#include <stack>",
         "#include <utility>",
         "",
-        f"// Iterative stack rewrite of recursive function {fn_name}",
         f"{sig} {{",
         f"    if ({step_var} >= {limit_var})  // Base case: stop recursion when index reaches upper limit",
         "        return 0;",

@@ -343,26 +343,11 @@ def optimize(
             # Fallback to general comment rules if not yet commented
             if not has_meaningful_comments(optimized_code):
                 optimized_code = generate_rule_based_comments(optimized_code)
-
-            # Ensure multi-line function documentation comments (/** ... */) are attached above each function
-            from app.model_processing.anchors import render_commented_code
-            from app.model_processing.function_comments import attach_function_doc_comments
-            doc_anchors = attach_function_doc_comments(optimized_code, [], "")
-            if doc_anchors:
-                optimized_code = render_commented_code(optimized_code, doc_anchors)
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to generate AI comments on optimize: %s", exc)
             if not has_meaningful_comments(optimized_code):
                 optimized_code = generate_rule_based_comments(optimized_code)
-            try:
-                from app.model_processing.anchors import render_commented_code
-                from app.model_processing.function_comments import attach_function_doc_comments
-                doc_anchors = attach_function_doc_comments(optimized_code, [], "")
-                if doc_anchors:
-                    optimized_code = render_commented_code(optimized_code, doc_anchors)
-            except Exception:
-                pass
 
     explanation_text = ""
     try:
@@ -377,6 +362,18 @@ def optimize(
         import logging
         logging.getLogger(__name__).warning("Failed to generate explanation for optimize: %s", exc)
         explanation_text = explanation_service.generate(optimized_code)
+
+    if result.changed and optimized_code:
+        try:
+            # Ensure multi-line function documentation comments (/** ... */) are attached above each function
+            from app.model_processing.anchors import render_commented_code
+            from app.model_processing.function_comments import attach_function_doc_comments
+            doc_anchors = attach_function_doc_comments(optimized_code, [], explanation_text)
+            if doc_anchors:
+                optimized_code = render_commented_code(optimized_code, doc_anchors)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to attach doc comments on optimize: %s", exc)
 
     return OptimizeResponse(
         input_code=payload.code.strip(),
