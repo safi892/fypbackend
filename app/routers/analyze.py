@@ -1,0 +1,339 @@
+"""``/analyze`` endpoint — orchestrates the full hybrid review pipeline.
+
+Problem solved: a single request must fan out to static analysis, the shared AI
+model, and the per-task services, then combine everything into one response.
+This router wires those stages together in order.
+
+Why orchestrate here (not in the services): keeps each service focused on one
+task and makes the pipeline order explicit and easy to follow/test.
+"""
+
+from fastapi import APIRouter, Header, HTTPException, Query
+
+from app.model_processing.anchors import Anchor, render_commented_code
+from app.model_processing.autofix import suggest_quick_fix
+from app.model_processing.statement_comments import detect_suspicious_logic
+from app.model_processing.syntax_check import check_cpp_syntax
+from app.parsers import cpp_parser
+from app.schemas.analyze import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AnchorStats,
+    CodeFixEdit,
+    CodeValidationRequest,
+    CodeValidationResponse,
+    LineComment,
+    OptimizeRequest,
+    OptimizeResponse,
+    SuggestedFix,
+)
+from app.schemas.history import HistoryListResponse
+from app.services import (
+    comment_service,
+    diff_service,
+    documentation_service,
+    explanation_service,
+    model_service,
+    optimization_service,
+    review_service,
+    translation_service,
+)
+from app.services.analyzer import analyze_code as static_analyze
+from app.services.auth_service import require_user
+from app.services.history_service import list_history, record_history
+
+router = APIRouter()
+
+
+def _validate_cpp_source(code: str, *, suggest_fix: bool = False) -> CodeValidationResponse:
+    """Use the same syntax gate for live editor feedback and model requests.
+
+    ``suggest_fix`` is opt-in: the editor endpoint asks for a previewable
+    punctuation fix alongside a syntax error, while ``/analyze`` keeps its
+    response contract untouched and pays nothing for the extra passes.
+    """
+    root = cpp_parser.parse(code)
+    if root is None:
+        raise HTTPException(
+            status_code=503,
+            detail="C++ validation is unavailable. Restore the C++ parser and try again.",
+        )
+    if not any(node.type != "comment" for node in root.named_children):
+        return CodeValidationResponse(
+            valid=False, message="Only C++ source code is supported. Add a C++ function or program."
+        )
+    if root.has_error:
+        wrapped = f"void __snippet__() {{\n{code}\n}}"
+        wrapped_root = cpp_parser.parse(wrapped)
+        if wrapped_root is not None and not wrapped_root.has_error:
+            return CodeValidationResponse(
+                valid=True, message="C++ syntax checked. Ready to analyze."
+            )
+
+        node = root
+        while not node.is_error and not node.is_missing:
+            child = next((child for child in node.children if child.has_error), None)
+            if child is None:
+                break
+            node = child
+        line = node.start_point.row + 1
+        return CodeValidationResponse(
+            valid=False,
+            message=f"Only C++ source code is supported. Check the syntax near line {line}. "
+            "Finish your statement and check for missing semicolons or brackets.",
+            line=line,
+            suggested_fix=_suggested_fix(code) if suggest_fix else None,
+        )
+    return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
+
+
+def _suggested_fix(code: str) -> SuggestedFix | None:
+    """Turn a parser-reported missing token into a gated, previewable proposal.
+
+    Problem solved: the editor wants "here is the fix" with its syntax error,
+    but only when the fix actually passes the same gate that rejected the
+    original. Why re-validate with ``suggest_fix`` off: the candidate must be
+    judged by the plain gate, or a fix proposing a fix would recurse.
+
+    :param code: the invalid source as submitted.
+    :return: the schema-ready fix, or ``None`` when no safe fix exists.
+    """
+    candidate = suggest_quick_fix(code)
+    if candidate is None or not _validate_cpp_source(candidate.code).valid:
+        return None
+    return SuggestedFix(
+        code=candidate.code,
+        description=candidate.description,
+        edits=[
+            CodeFixEdit(line=edit.line, before=edit.before, after=edit.after)
+            for edit in candidate.edits
+        ],
+    )
+
+
+@router.post("/validate-code", response_model=CodeValidationResponse)
+def validate_code(payload: CodeValidationRequest) -> CodeValidationResponse:
+    """Check editor input without authentication, inference, execution, or history writes.
+
+    A syntax error also carries ``suggested_fix`` when tree-sitter named the
+    missing token; the client previews it and applies it only on user action.
+    """
+    return _validate_cpp_source(payload.code, suggest_fix=True)
+
+
+def _anchor_from_item(item: dict[str, object]) -> Anchor:
+    """Build a checked anchor from the model's normalized line-comment dict."""
+    line = item.get("line")
+    if not isinstance(line, int):
+        line = int(str(line))
+    return Anchor(
+        line=line,
+        code=str(item.get("code", "")),
+        comment=str(item.get("comment", "")),
+        placement=str(item.get("placement", "inline")),
+    )
+
+
+def _translated_line_comments(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Translate anchor comments without touching their line or quoted code."""
+    translated = []
+    for item in items:
+        translated.append({
+            **item,
+            "comment": translation_service.to_roman_urdu(str(item.get("comment", ""))),
+        })
+    return translated
+
+
+@router.post(
+    "/analyze",
+    response_model=AnalyzeResponse,
+    response_model_include={
+        "input_code",
+        "commented_code",
+        "explanation",
+        "needs_review",
+        "review_reasons",
+    },
+)
+def analyze(
+    payload: AnalyzeRequest,
+    authorization: str | None = Header(default=None),
+) -> AnalyzeResponse:
+    """Run the full code-review pipeline, with optional authenticated history.
+
+    Problem solved: this is the one entry point the mobile client calls. Why
+    staged pipeline: static analysis (fast) feeds the internal rule-based
+    services, the model feeds the comment/explanation tasks, and optional
+    stages (diff, translation) only run when requested.
+
+    :param payload: the validated analysis request.
+    :param authorization: optional bearer token header for saving history.
+    :return: the combined result, filtered by FastAPI to the public fields.
+    :raises HTTPException: 401 if an invalid token is sent, 503 if the model cannot load.
+    """
+    user = require_user(authorization) if authorization else None
+
+    validation = _validate_cpp_source(payload.code)
+    if not validation.valid:
+        raise HTTPException(status_code=422, detail=validation.message)
+
+    # Phase 3 — deterministic static analysis (cheap; feeds the rule-based
+    # services below, never a model prompt).
+    analysis = static_analyze(payload.code, language=payload.language)
+
+    # Shared AI backend (CodeT5): a single inference returning raw sections.
+    try:
+        raw = model_service.run_model(payload.code, analysis=analysis)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    # Task-specific NLP services (each owns its rule-engine / AI-model choice).
+    commented_code = comment_service.generate(
+        payload.code, raw.commented_code, verified=raw.verified
+    )
+    explanation = explanation_service.generate(payload.code, raw.explanation)
+    suggestions = review_service.generate_suggestions(analysis)
+    documentation = documentation_service.generate(analysis)
+
+    # Safety gate: flag commented code the compiler rejects so clearly broken
+    # model output is surfaced for human review rather than trusted blindly.
+    # An anchored backend never regenerates the source, so its output can only
+    # fail this if the submission itself does not compile — and the gate is a
+    # compiler subprocess with a 20-second timeout whose answer is then thrown
+    # away. Only pay for it when a backend actually rewrote the code.
+    syntax_ok = True
+    if not raw.verified:
+        syntax_ok, _ = check_cpp_syntax(commented_code)
+
+    # `needs_review` keeps its name and type because an Android client reads it,
+    # but the old rule made it a poor signal: an anchored backend can only fail
+    # the syntax gate if the *submission* does not compile, so it answered false
+    # on every well-formed request — including ones where comments were thrown
+    # away for being untrue of their line. Discarded anchors mean the model was
+    # drifting on this input, and what survived deserves a second look.
+    stats = raw.anchor_stats or {}
+    discarded = stats.get("dropped", 0) + stats.get("rejected_semantic", 0)
+
+    review_reasons: list[str] = []
+    suspicious = detect_suspicious_logic(payload.code)
+    if suspicious:
+        review_reasons.extend(suspicious)
+    if not syntax_ok and not raw.verified:
+        review_reasons.append("C++ syntax check failed on generated code.")
+    if discarded > 0:
+        review_reasons.append(
+            f"{discarded} comment anchor(s) were dropped or refuted by syntax rules."
+        )
+
+    needs_review = len(review_reasons) > 0
+
+    # Phase 4 — only when the client sent a previous version.
+    change_analysis = None
+    if payload.old_code:
+        change_analysis = diff_service.compare(payload.old_code, payload.code)
+
+    # Phase 10 — only when Roman Urdu was requested.
+    translation = None
+    line_comment_items = raw.line_comments
+    if translation_service.is_roman_urdu(payload.output_language):
+        explanation = translation_service.to_roman_urdu(explanation)
+        translation = explanation
+        if raw.verified and raw.line_comments:
+            line_comment_items = _translated_line_comments(raw.line_comments)
+            commented_code = render_commented_code(
+                payload.code,
+                [_anchor_from_item(item) for item in line_comment_items],
+            )
+
+    response = AnalyzeResponse(
+        input_code=payload.code.strip(),
+        commented_code=commented_code,
+        explanation=explanation,
+        analysis=analysis,
+        suggestions=suggestions,
+        documentation=documentation,
+        change_analysis=change_analysis,
+        translation=translation,
+        line_comments=[LineComment(**item) for item in line_comment_items],
+        anchor_stats=AnchorStats(**raw.anchor_stats) if raw.anchor_stats else None,
+        verified_comments=raw.verified,
+        needs_review=needs_review,
+        review_reasons=review_reasons,
+    )
+
+    if user is not None:
+        record_history(
+            user_id=user.id,
+            input_code=response.input_code,
+            commented_code=response.commented_code,
+            explanation=response.explanation,
+            source=payload.source,
+        )
+
+    return response
+
+
+@router.post("/optimize", response_model=OptimizeResponse)
+def optimize(
+    payload: OptimizeRequest,
+    authorization: str | None = Header(default=None),
+) -> OptimizeResponse:
+    """Return a faster version of the submitted code, if one can be proven.
+
+    Problem solved: commenting and explaining describe code; this changes it,
+    which is a different promise. A rewrite that is merely plausible is worse
+    than none, so the proposal is compiled beside the original, both are run on
+    the same inputs, and it is only returned when the outputs agree.
+
+    Why the original comes back on failure rather than an error: a client
+    asking for a faster version should never be handed code that computes
+    something else, and should never be handed nothing either. ``changed`` and
+    ``verified`` say which case this is.
+
+    :param payload: the code to optimize.
+    :param authorization: bearer token header (may be ``None`` -> 401).
+    :return: the code to show plus the evidence for it.
+    :raises HTTPException: 401 if unauthenticated.
+    """
+    if payload.source != "web":
+        require_user(authorization)
+
+    try:
+        result = optimization_service.optimize_checked(
+            payload.code,
+            mode=payload.mode,
+            allow_unverified=(payload.source == "web"),
+        )
+    except TypeError:
+        result = optimization_service.optimize_checked(payload.code)
+    return OptimizeResponse(
+        input_code=payload.code.strip(),
+        code=result.code,
+        changed=result.changed,
+        verified=result.verified,
+        speedup=round(result.speedup, 2),
+        note=result.note,
+    )
+
+
+@router.get("/analyze/history", response_model=HistoryListResponse)
+def analyze_history(
+    authorization: str | None = Header(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> HistoryListResponse:
+    """Return paginated analysis history for the authenticated user.
+
+    Problem solved: lets the client show past reviews. Why paginated: history
+    can grow large, so we bound the response with ``limit``/``offset``.
+
+    :param authorization: bearer token header.
+    :param limit: max items to return (1-100).
+    :param offset: items to skip from the start.
+    :return: a page of history items with total count.
+    :raises HTTPException: 401 if unauthenticated.
+    """
+    user = require_user(authorization)
+    items, total = list_history(user_id=user.id, limit=limit, offset=offset)
+    return HistoryListResponse(items=items, total=total, limit=limit, offset=offset)

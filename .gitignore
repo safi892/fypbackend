@@ -1,0 +1,64 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.pyd
+*.pyo
+build/
+dist/
+wheels/
+*.egg-info
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# Type check / lint caches
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.pyre/
+
+
+
+# Caches
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.env.*
+
+# Virtual environments
+.venv
+.impeccable
+.ai
+.playwright-mcp
+
+
+trained_model
+
+# Local model artifacts
+models/
+codet5_commenst_expla/
+
+# Runtime files
+*.db
+*.pid
+logs/
+
+# Windows setup.bat artifacts (downloaded llama.cpp build + setup stamp)
+tools/
+
+# OS files
+.DS_Store

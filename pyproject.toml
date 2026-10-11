@@ -1,0 +1,148 @@
+[project]
+name = "fyp-cpp-code-review-backend"
+version = "0.2.0"
+description = "Hybrid C++ code-review backend (FastAPI): deterministic static analysis + AI generation, backward compatible with the existing mobile client."
+readme = "README.md"
+# 3.11 is what this is developed and tested on. The upper bound is only for the
+# optional `codet5` extra: torch 2.0.1 has no 3.12 wheels. The core install now
+# needs no ML packages, so it would run on newer Python - the bound stays
+# because nothing here has been tested there, not because anything forbids it.
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    # --- Web layer ---------------------------------------------------------
+    # Plain `fastapi`, not `fastapi[standard]`. That extra adds eight packages
+    # for features this API does not have: jinja2 (no templates), 
+    # python-multipart (no uploads or form posts), email-validator + dnspython
+    # (no EmailStr - auth validates its own), pydantic-settings and
+    # pydantic-extra-types (unused), and fastapi-cli, which drags in typer,
+    # rich, shellingham, rignore, fastapi-cloud-cli and **sentry-sdk**. Nothing
+    # runs `fastapi run`; `runserver.sh` calls `python -m uvicorn` directly. A
+    # telemetry SDK that is never initialised is still a telemetry SDK shipped.
+    "fastapi>=0.135.2",             # tested with 0.135.2
+    # Plain `uvicorn` too. The [standard] extra is uvloop (13.6 MB), httptools,
+    # websockets, watchfiles and python-dotenv. This app opens no websockets, no
+    # run path passes --reload, and `app.core.config._load_dotenv` is the
+    # project's own KEY=VALUE reader by deliberate choice - its docstring says a
+    # full dotenv library is overkill. uvloop and httptools are pure event-loop
+    # speed, and the request this serves spends seconds inside a 1.5B model, so
+    # they optimise a rounding error. Add `[standard]` back if any of that
+    # changes; nothing in the code has to move.
+    "uvicorn>=0.42.0",              # tested with 0.42.0
+    # Imported directly by every schema in app/schemas/, and was never declared:
+    # it was arriving through fastapi. That works until fastapi changes its
+    # bounds, at which point the break is in code that does not mention fastapi.
+    "pydantic>=2.0",                # tested with 2.12.4
+
+    # --- C++ parsing -------------------------------------------------------
+    # Used by the static analyzer and by the chunker that splits a file into
+    # function-sized pieces before sending it to the model. The upper bounds
+    # matter: the Python bindings changed their Language/Parser constructor
+    # between minor releases.
+    "tree-sitter>=0.23,<0.26",      # tested with 0.25.2
+    "tree-sitter-cpp>=0.23,<0.24",  # tested with 0.23.4
+]
+
+# The Qwen backend needs no Python packages of its own: it uses urllib and json
+# from the standard library. What it does need is outside pip - see
+# docs/SETUP.md for llama.cpp and the model weights.
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6.0",                  # tested with 0.15.22
+    "mypy>=1.11.0",                 # tested with 2.3.0
+    "pytest>=8.0.0",                # tested with 9.1.1
+    "httpx>=0.27.0",                # tested with 0.28.1 - FastAPI TestClient
+]
+
+# The Qwen backend needs no Python packages of its own: it uses urllib and json
+# from the standard library. What it does need is outside pip - see
+# docs/SETUP.md for llama.cpp and the model weights.
+
+[project.optional-dependencies]
+# In-process model backends. Neither is needed to run the service: the default
+# request path is MODEL_BACKEND=qwen_gguf over HTTP, and the Roman Urdu field
+# falls back to the rule-based sentence frames when the T5 is absent. About
+# 2 GB of wheels, so it is opt-in:
+#
+#     uv sync --extra codet5
+#
+# `model_service` and `translation_service` import all of this inside the
+# functions that use it, and `_import_ml` turns a missing install into the
+# RuntimeError the router already renders as a 503. So the app imports, and the
+# test suite runs, with none of it present.
+codet5 = [
+    # torch 2.0.1: newer torch changes seq2seq beam search, and the CodeT5
+    # numbers in test_results.md were measured on this one.
+    "torch==2.0.1",
+    "transformers==4.46.2",         # pinned: must match the CodeT5 checkpoint
+    "sentencepiece>=0.2.1",         # tested with 0.2.1 - T5/CodeT5 tokenizer
+    # Needed by transformers to convert a slow SentencePiece tokenizer when a
+    # checkpoint ships spiece.model without tokenizer.json. It is NOT a
+    # sentencepiece dependency - sentencepiece declares none - which is what
+    # this line used to claim.
+    "protobuf>=7.34.1",             # tested with 7.34.1
+    # Only here because torch 2.0.1 was built against the NumPy 1.x ABI; NumPy 2
+    # breaks tensor conversion at runtime rather than at install time. It is not
+    # a constraint the rest of the project has, which is why it sits beside the
+    # torch pin that causes it rather than in the core dependency list.
+    "numpy<2",                      # tested with 1.26.4
+]
+
+# huggingface_hub and the other transformers dependencies are deliberately not
+# listed: transformers already requires huggingface-hub<1.0,>=0.23.2, numpy,
+# tokenizers, safetensors and regex. Declaring them again pins two things to one
+# fact and lets them drift.
+
+# --- Linting & formatting (enforces a single clean code style) -------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["app"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports / undefined names)
+    "I",   # import sorting
+    "UP",  # pyupgrade (modern syntax)
+    "B",   # bugbear (likely bugs)
+    "ANN", # missing type annotations
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and the entrypoint are allowed looser annotation rules.
+"tests/*" = ["ANN"]
+# Dev scripts embed long C++ sample literals (legitimate >100 char lines).
+"scripts/*" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+
+# --- Static type checking (strict: no untyped code allowed) -----------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_return_any = true
+plugins = ["pydantic.mypy"]
+
+# These ML libraries ship without type stubs; treat their imports as `Any`
+# rather than failing the whole strict build.
+[[tool.mypy.overrides]]
+module = ["transformers.*", "torch.*", "tree_sitter.*"]
+ignore_missing_imports = true
+
+
+# --- Tests ------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
+addopts = "-q"

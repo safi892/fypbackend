@@ -1,0 +1,330 @@
+# Setup
+
+Everything needed to run this backend, in order. Three of the four steps are
+ordinary Python; the fourth is the inference server, which is a native binary
+and the model weights, neither of which pip can install.
+
+Check your work at any point with:
+
+```bash
+curl -s localhost:8000/ready | python3 -m json.tool
+```
+
+It names what is missing rather than leaving you to infer it from a failed
+request.
+
+---
+
+## What you need
+
+| Component | Version | Why | Required |
+| --- | --- | --- | --- |
+| Python | **3.11** | 3.13 is excluded: torch 2.0.1 has no wheels, for the `codet5` extra | yes |
+| llama.cpp | any recent | serves the Qwen model over HTTP | for `qwen_gguf` |
+| GGUF weights | 0.92 GB | not in git, shared separately | for `qwen_gguf` |
+| Roman Urdu model | 0.23 GB | translates generated prose when requested | for `output_language=roman_urdu` |
+| C++ compiler | any C++17 | verifies optimisations by running them | optional |
+
+The C++ compiler is genuinely optional: without it `/analyze` works normally
+and `/optimize` returns rewrites marked `verified: false`.
+
+---
+
+## 1. Python 3.11
+
+```bash
+python3 --version        # want 3.11.x
+```
+
+If it is not 3.11:
+
+```bash
+# macOS
+brew install python@3.11
+
+# Ubuntu / Debian
+sudo apt install python3.11 python3.11-venv
+
+# Windows — install from python.org. The included setup.bat can also install it through uv.
+```
+
+`.python-version` pins 3.11 for tools that read it (uv, pyenv).
+
+## 2. Python dependencies
+
+```bash
+# recommended
+python3 -m pip install --upgrade uv
+uv sync
+
+# or plain pip
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e . && pip install pytest httpx ruff mypy
+```
+
+`uv sync` installs the web layer and the C++ parsers and nothing else — about
+90 packages. The `qwen_gguf` backend needs no Python packages at all: it talks
+to llama-server with `urllib` and `json`.
+
+The in-process model backends are an opt-in extra, roughly 2 GB of wheels:
+
+```bash
+uv sync --extra codet5
+```
+
+Install it if you set `MODEL_BACKEND=codet5`, or if you want the Roman Urdu
+field answered by the trained T5 rather than by the rule-based sentence frames.
+Without it the app still imports and every test still passes; a request that
+reaches the CodeT5 engine returns **503** with a message naming the extra.
+
+Two pins inside that extra are load-bearing:
+
+- **`torch==2.0.1`** — newer versions change seq2seq beam search, which alters
+  the CodeT5 output.
+- **`numpy<2`** — torch 2.0.1 was built against the NumPy 1.x ABI. NumPy 2
+  installs cleanly and then fails at runtime when converting tensors, which is
+  a slow way to find out. It is pinned beside torch rather than at the top
+  level, because torch is the only reason for it.
+
+Verify:
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+On Windows, use the virtual environment's Windows interpreter instead:
+
+```bat
+.venv\Scripts\python.exe -m pytest -q
+```
+
+## 3. llama.cpp
+
+The API does not load the Qwen model itself. It talks to `llama-server`, which
+loads the weights once and keeps them in memory — a gigabyte is not something to
+load per request, or per worker.
+
+```bash
+# macOS
+brew install llama.cpp
+
+# Ubuntu / Debian — build from source
+sudo apt install build-essential cmake git
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp && cmake -B build && cmake --build build --config Release -j
+sudo cp build/bin/llama-server /usr/local/bin/
+
+# Windows — download a release binary from
+# https://github.com/ggml-org/llama.cpp/releases and put it on PATH,
+# or let setup.bat fetch it for you.
+```
+
+Verify:
+
+```bash
+llama-server --version
+```
+
+## 4. The model weights
+
+**Not in git.** `models/` is ignored because the file is 940 MB. Get it from
+whoever set the project up and put it here:
+
+```
+models/gguf/qwen-cpp-review-v3-q4_k_m.gguf
+```
+
+Verify:
+
+```bash
+ls -lh models/gguf/
+```
+
+Three builds exist; all produce the same answers, and all keep 100% anchor
+validity. The smallest loses one concept in sixteen against the unquantised
+build, which is why it is the default.
+
+| file | size | speed (CPU) |
+| --- | ---: | ---: |
+| `qwen-cpp-review-v3-q4_k_m.gguf` | 0.92 GB | ~18 tok/s |
+| `qwen-cpp-review-q8_0.gguf` | 1.5 GB | ~13 tok/s |
+| `qwen-cpp-review-f16.gguf` | 2.9 GB | ~8 tok/s |
+
+Set `LLAMA_MODEL_PATH` to choose a different one.
+
+## 5. C++ compiler (optional)
+
+Used only by `/optimize`, to compile a proposed rewrite alongside the original
+and check they still agree.
+
+```bash
+# macOS — comes with the Xcode command line tools
+xcode-select --install
+
+# Ubuntu / Debian
+sudo apt install build-essential
+```
+
+Verify:
+
+```bash
+c++ --version
+```
+
+## 6. Roman Urdu model
+
+Not in git — `models/` is ignored. Put the trained T5 model here:
+
+```
+models/roman-model/t5-stage2-c/
+```
+
+Required files:
+
+```text
+config.json
+generation_config.json
+model.safetensors
+tokenizer.json
+tokenizer_config.json
+```
+
+The default `ROMAN_URDU_MODEL_PATH` points there. If the model is missing or
+cannot load, the backend falls back to the existing frame translator. If the
+model drops a protected code placeholder, the English is returned rather than a
+translation that no longer names the user's code.
+
+Do not copy training checkpoints into the backend. Directories such as
+`checkpoint-*`, optimizer state, scheduler state, RNG state and
+`training_args.bin` are training artifacts; the API does not use them.
+
+## 7. Configuration
+
+Create `.env` in the project root:
+
+```ini
+MODEL_BACKEND=qwen_gguf
+LLAMA_SERVER_URL=http://127.0.0.1:8081
+```
+
+`MODEL_BACKEND` defaults to `qwen_gguf`. It used to default to `codet5` so an
+existing deployment kept its old behaviour, but that stopped being the kind
+default: the CodeT5 checkpoint is not in the repository and its libraries are
+now the opt-in `codet5` extra, so the default asked for a model nobody has and
+packages nobody installed. Set `MODEL_BACKEND=codet5` to select the old engine
+deliberately. Every other setting has a working default; the ones worth knowing:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MODEL_BACKEND` | `qwen_gguf` | `qwen_gguf` or `codet5` (needs `--extra codet5`) |
+| `LLAMA_SERVER_URL` | `http://127.0.0.1:8081` | where llama-server listens |
+| `LLAMA_MODEL_PATH` | `models/gguf/qwen-cpp-review-v3-q4_k_m.gguf` | which build to serve |
+| `LLAMA_THREADS` | `8` | set to your CPU core count |
+| `LLAMA_CHUNK_TOKENS` | `300` | how large a piece of a file the model sees at once |
+| `LLAMA_MAX_NEW_TOKENS` | `900` | answer budget; too small truncates the JSON |
+| `ROMAN_URDU_MODEL_PATH` | `models/roman-model/t5-stage2-c` | trained T5 translator |
+| `ROMAN_URDU_NUM_BEAMS` | `4` | beam search used for measured quality |
+| `ROMAN_URDU_MAX_NEW_TOKENS` | `160` | translation output budget |
+
+---
+
+## Running
+
+Two processes. Start the model server first — the API falls back to CodeT5
+without it.
+
+```bash
+./run_model_server.sh --bg     # llama.cpp on 8081
+./runserver.sh                 # the API on 8080
+```
+
+Port 8081 is deliberate: the API owns 8080, and the two competing for the
+socket is a confusing way to discover the clash.
+
+### Windows
+
+From Command Prompt in the project root, run:
+
+```bat
+setup.bat
+```
+
+The setup command installs missing dependencies and offers to start both
+services. After the first run, `setup.bat start` starts them, `setup.bat status`
+checks them, and `setup.bat stop` stops them. The API is at
+`http://localhost:8080/`.
+
+Managing the model server:
+
+```bash
+./run_model_server.sh --status   # is one already running?
+./run_model_server.sh --stop     # stop it
+```
+
+Starting it twice is harmless — the second call reports that one is already
+serving and exits, rather than failing to bind the port.
+
+## Confirming it works
+
+```bash
+curl -s localhost:8080/ready | python3 -m json.tool
+```
+
+```json
+{
+  "ready": true,
+  "backend": "qwen_gguf",
+  "checks": {
+    "model_file":   { "ok": true, "detail": "qwen-cpp-review-v3-q4_k_m.gguf (0.92 GB)" },
+    "llama_server": { "ok": true, "detail": "ready at http://127.0.0.1:8081" },
+    "cpp_compiler": { "ok": true, "detail": "/usr/bin/c++", "required": false }
+  },
+  "next_step": null
+}
+```
+
+Then a real request:
+
+```bash
+TOKEN=$(curl -s localhost:8080/auth/register -H 'Content-Type: application/json' \
+  -d '{"name":"Dev","email":"dev@example.com","password":"password123","confirm_password":"password123"}' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))')
+
+curl -s localhost:8080/analyze -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"int fib(int n){ if(n<=1) return n; return fib(n-1)+fib(n-2); }"}' \
+  | python3 -m json.tool
+```
+
+---
+
+## Troubleshooting
+
+**`llama-server ... is not answering`**
+The model server is not running. `./run_model_server.sh --bg`. The API falls
+back to CodeT5 rather than failing, so a mobile client gets a degraded answer
+instead of an error.
+
+**`Model path not found: .../checkpoint-9604`**
+The CodeT5 backend is selected but its checkpoint is not on this machine. Set
+`MODEL_BACKEND=qwen_gguf` in `.env`, or restore the checkpoint.
+
+**`Numpy is not available` / `_ARRAY_API not found`**
+NumPy 2 was installed over torch 2.0.1. `pip install "numpy<2"`.
+
+**First request is slow**
+The model loads when the server starts, not per request.
+`run_model_server.sh --bg` waits for it before returning.
+
+**Long files take a while**
+A file is split into function-sized pieces and each is a separate request.
+Roughly a minute per 120 lines on a laptop CPU.
+
+**`couldn't bind HTTP server socket ... port: 8081`**
+A model server is already running. `./run_model_server.sh --status` will say
+so. If something else holds the port, set `LLAMA_PORT` and `LLAMA_SERVER_URL`
+to a free one.
+
+**Tests fail on `test_analyze_endpoint`**
+Those exercise the model end to end. Start the model server first, or set
+`MODEL_BACKEND` to a backend this machine actually has.

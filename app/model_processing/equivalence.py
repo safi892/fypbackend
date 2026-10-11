@@ -1,0 +1,700 @@
+"""Compile an optimised rewrite alongside the original and compare their output.
+
+Problem solved: an optimisation that changes the answer is not an optimisation,
+and reading the code cannot tell you which you have. The previous engine's
+"improved code" was never executed, which is exactly how it came to return
+reformatting and added ``const`` references rather than anything faster. Nothing
+here is offered to a client until it has been run.
+
+The check is behavioural: identical output on generated inputs proves agreement
+on those inputs and nothing more. That is enough to reject a rewrite that
+changes the result, which is the failure that matters to a user.
+
+Why it degrades rather than refuses: a signature the driver cannot supply
+arguments for, or a machine with no compiler, yields ``verified=False`` and the
+original code. A user is never handed an unchecked rewrite, and never handed an
+error either.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from app.core.compiler import CxxCompiler, find_cxx_compiler
+from app.parsers import cpp_parser
+
+#: Argument types the generated driver knows how to supply values for.
+SCALAR_TYPES = {
+    "int",
+    "long",
+    "long long",
+    "size_t",
+    "unsigned",
+    "double",
+    "float",
+    "bool",
+    "char",
+    "unsigned char",
+    "short",
+    "unsigned long",
+}
+
+#: Spellings of the same scalar. Refusing a function over its author's choice
+#: of prefix declines a large slice of ordinary C++ for no reason.
+TYPE_ALIASES = {
+    "std::size_t": "size_t",
+    "unsigned int": "unsigned",
+    "signed int": "int",
+    "ll": "long long",
+    "ull": "long long",
+    "int64_t": "long long",
+    "std::string": "string",
+    "uint": "unsigned",
+    "lli": "long long",
+}
+
+#: Driven as words rather than numbers.
+STRING_TYPES = {"string"}
+
+#: One argument for one call: a scalar, the contents of a sequence, or text.
+Value = int | tuple[int, ...] | str
+
+SIGNATURE_RE = re.compile(
+    r"^\s*(?P<ret>[A-Za-z_][\w:<>,\s*&]*?)\s+(?P<name>[A-Za-z_]\w*)\s*\((?P<params>[^)]*)\)\s*\{?",
+    re.MULTILINE,
+)
+
+HEADERS = (
+    "#include <iostream>\n#include <vector>\n#include <string>\n#include <map>\n"
+    "#include <unordered_map>\n#include <algorithm>\n#include <climits>\n#include <cmath>\n"
+)
+
+#: Work below this, once process start-up is removed, is too small to time.
+NOISE_FLOOR_SECONDS = 0.05
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """One declared argument, and what the driver can do with it."""
+
+    type: str
+    name: str
+    is_array: bool = False
+    is_reference: bool = False
+    is_const: bool = False
+    #: Declared array dimensions: 1 for ``int a[]``, 2 for ``int a[][5]``.
+    dimensions: int = 0
+    #: Source text of the default value, when the parameter has one. A
+    #: defaulted parameter is still a parameter: dropping it silently narrows
+    #: the inputs the driver varies, so a rewrite that is wrong for any value
+    #: but the default passes.
+    default: str | None = None
+
+    @property
+    def is_vector(self) -> bool:
+        return "vector" in self.type
+
+    @property
+    def element_type(self) -> str:
+        """The scalar type a value of this parameter is made of.
+
+        The inner match is greedy on purpose: stopping at the first ``>`` reads
+        ``std::vector<std::vector<int>>`` as being made of ``vector<int``, a
+        type that does not exist, so a nested sequence gets refused under a
+        mangled name instead of its real one.
+        """
+        inner = re.search(r"<\s*(.+)\s*>", self.type)
+        base = inner.group(1) if inner else self.type
+        cleaned = base.replace("const", "").replace("&", "").replace("*", "").strip()
+        return TYPE_ALIASES.get(cleaned, cleaned)
+
+    @property
+    def is_string(self) -> bool:
+        return self.element_type in STRING_TYPES
+
+    @property
+    def is_buffer(self) -> bool:
+        """A numeric sequence. A string is a sequence too, but prints itself."""
+        return (self.is_array or self.is_vector) and not self.is_string
+
+    @property
+    def is_output(self) -> bool:
+        """Whether the callee can write through this parameter.
+
+        This is what makes a ``void`` function checkable: the answer is not
+        returned, so it has to be read back out of the arguments.
+        """
+        if self.is_const:
+            return False
+        return self.is_array or self.is_reference
+
+    @property
+    def is_multidimensional(self) -> bool:
+        """``int a[][5]`` and friends, which the driver cannot supply.
+
+        The driver backs every sequence with a ``std::vector`` and passes
+        ``.data()``, which is an ``int*``. A parameter declared ``int a[][5]``
+        wants ``int (*)[5]``, so the generated program does not compile and the
+        verdict comes back "original compile failed" — a true statement about
+        the harness that reads as a statement about the user's code.
+        """
+        return self.dimensions > 1
+
+    @property
+    def drivable(self) -> bool:
+        if self.is_multidimensional:
+            return False
+        return self.element_type in SCALAR_TYPES or self.is_string
+
+
+@dataclass(frozen=True)
+class Signature:
+    """A parsed function signature."""
+
+    return_type: str
+    name: str
+    params: tuple[Parameter, ...]
+
+    @property
+    def returns_value(self) -> bool:
+        return self.return_type.strip() != "void"
+
+    @property
+    def observable(self) -> bool:
+        """Whether calling this produces anything that can be compared.
+
+        A ``void`` function taking everything by value prints nothing, and
+        nothing compares equal to nothing — so accepting the shape would report
+        every such rewrite as verified. A check that always passes is worse
+        than no check, because the user is told the rewrite was proven.
+        """
+        return self.returns_value or any(p.is_output for p in self.params)
+
+    @property
+    def drivable(self) -> bool:
+        """Whether a caller can be generated for this shape."""
+        if not self.params:
+            return False
+        return all(p.drivable for p in self.params) and self.observable
+
+
+@dataclass
+class EquivalenceResult:
+    """The verdict on one proposed rewrite."""
+
+    verified: bool = False
+    equivalent: bool = False
+    cases: int = 0
+    agreed: int = 0
+    speedup: float = 0.0
+    timing_reliable: bool = False
+    reason: str = ""
+
+    def summary(self) -> str:
+        if not self.verified:
+            return f"not verified: {self.reason}"
+        if not self.equivalent:
+            return f"rejected: output differs on {self.cases - self.agreed} of {self.cases} inputs"
+        if not self.timing_reliable:
+            return f"equivalent on {self.cases} inputs; too fast to time reliably"
+        return f"equivalent on {self.cases} inputs, {self.speedup:.1f}x faster"
+
+
+def _parse_signature_ast(code: str) -> Signature | None:
+    """Extract the best function signature using Tree-sitter C++ AST traversal.
+
+    Problem solved: regex signature matching breaks on modern C++ constructs
+    (trailing return types, templates, complex qualifiers). Tree-sitter provides
+    ground-truth structural parsing.
+
+    Why sort by start_byte: iter_descendants uses a LIFO stack, so children are
+    visited in reverse source order. Without sorting, the last function in the
+    file is returned first. Sorting by start_byte restores source order.
+
+    Why prefer drivable: a multi-function file where the first function takes
+    an undrivable type (e.g. int[][5]) should still be checkable via the next
+    drivable function. Fall back to the first function overall.
+    """
+    root = cpp_parser.parse(code)
+    if root is None:
+        return None
+
+    # Collect all function nodes sorted by their position in the source.
+    fn_nodes = sorted(
+        cpp_parser.iter_descendants(root, {"function_definition"}),
+        key=lambda n: n.start_byte,
+    )
+
+    all_sigs: list[Signature] = []
+    for fn in fn_nodes:
+        decl = fn.child_by_field_name("declarator")
+        while decl and decl.type in ("pointer_declarator", "reference_declarator"):
+            decl = decl.child_by_field_name("declarator")
+        if not decl or decl.type != "function_declarator":
+            continue
+
+        name_node = decl.child_by_field_name("declarator")
+        name = cpp_parser.node_text(name_node) if name_node else ""
+        if not name or name in {"main", "if", "for", "while", "switch", "return", "sizeof"}:
+            continue
+
+        # Return type
+        trailing = next((c for c in decl.children if c.type == "trailing_return_type"), None)
+        if trailing:
+            ret_type_node = trailing.child_by_field_name("type")
+            ret = (
+                cpp_parser.node_text(ret_type_node)
+                if ret_type_node
+                else cpp_parser.node_text(trailing).replace("->", "").strip()
+            )
+        else:
+            type_node = fn.child_by_field_name("type")
+            ret = cpp_parser.node_text(type_node) if type_node else "void"
+            top_decl = fn.child_by_field_name("declarator")
+            if top_decl and top_decl.type == "pointer_declarator":
+                ret += "*"
+            elif top_decl and top_decl.type == "reference_declarator":
+                ret += "&"
+
+        # Parameters
+        params_node = next((c for c in decl.children if c.type == "parameter_list"), None)
+        params: list[Parameter] = []
+        if params_node:
+            for p in params_node.children:
+                # `optional_parameter_declaration` is how Tree-sitter labels a
+                # parameter that has a default. Matching only
+                # `parameter_declaration` dropped it, so `f(int a[][5], int n,
+                # int x = 0)` parsed as two parameters and every generated case
+                # ran with x = 0.
+                if p.type not in ("parameter_declaration", "optional_parameter_declaration"):
+                    continue
+                p_text = cpp_parser.node_text(p)
+                default_node = p.child_by_field_name("default_value")
+                p_default = cpp_parser.node_text(default_node) if default_node else None
+                is_const = "const" in p_text.split()
+                is_array = "[" in p_text
+                is_reference = "&" in p_text or "*" in p_text
+
+                type_child = p.child_by_field_name("type")
+                p_type = cpp_parser.node_text(type_child) if type_child else ""
+                decl_child = p.child_by_field_name("declarator")
+                curr = decl_child
+                while curr and curr.type in (
+                    "array_declarator",
+                    "reference_declarator",
+                    "pointer_declarator",
+                ):
+                    curr = curr.child_by_field_name("declarator") or next(
+                        (c for c in curr.children if c.type == "identifier"), None
+                    )
+                p_name = cpp_parser.node_text(curr) if curr else ""
+                if not p_type and not p_name:
+                    continue
+                params.append(
+                    Parameter(
+                        type=p_type,
+                        name=p_name,
+                        is_array=is_array,
+                        is_reference=is_reference,
+                        is_const=is_const,
+                        dimensions=p_text.count("["),
+                        default=p_default,
+                    )
+                )
+
+        all_sigs.append(Signature(ret.strip(), name.strip(), tuple(params)))
+
+    # Prefer the first drivable function so a file where the leading function
+    # uses an undrivable type (e.g. int[][5]) doesn't block checking a later
+    # drivable one. Fall back to the first function overall.
+    for sig in all_sigs:
+        if sig.drivable:
+            return sig
+    return all_sigs[0] if all_sigs else None
+
+
+
+def _parse_signature_regex(code: str) -> Signature | None:
+    """Fallback regex signature reader if AST parsing is unavailable."""
+    for match in SIGNATURE_RE.finditer(code):
+        name = match.group("name")
+        if name in {"main", "if", "for", "while", "switch", "return", "sizeof"}:
+            continue
+        raw = match.group("params").strip()
+        params: list[Parameter] = []
+        if raw and raw != "void":
+            for piece in _split_params(raw):
+                piece = piece.strip()
+                piece_default: str | None = None
+                if "=" in piece:
+                    piece, _, piece_default = piece.partition("=")
+                    piece, piece_default = piece.strip(), piece_default.strip() or None
+                dimensions = piece.count("[")
+                is_array = "[" in piece
+                is_reference = "&" in piece or "*" in piece
+                is_const = bool(re.match(r"\bconst\b", piece))
+                cleaned = re.sub(r"\[[^\]]*\]", "", piece).strip()
+                bits = cleaned.replace("&", " ").replace("*", " ").split()
+                if len(bits) < 2:
+                    return None
+                params.append(
+                    Parameter(
+                        type=" ".join(bits[:-1]),
+                        name=bits[-1],
+                        is_array=is_array,
+                        is_reference=is_reference,
+                        is_const=is_const,
+                        dimensions=dimensions,
+                        default=piece_default,
+                    )
+                )
+        return Signature(match.group("ret").strip(), name, tuple(params))
+    return None
+
+
+def parse_signature(code: str) -> Signature | None:
+    """Read the first real function definition out of ``code`` using AST or regex."""
+    sig = _parse_signature_ast(code)
+    if sig is not None:
+        return sig
+    return _parse_signature_regex(code)
+
+
+def _split_params(raw: str) -> list[str]:
+    """Split on the commas that separate parameters, not the ones inside types.
+
+    ``std::map<int, int> counts`` holds a comma belonging to the template
+    argument list, and splitting on it yields two nonsense parameters that then
+    parse as plausible ones.
+    """
+    pieces: list[str] = []
+    depth = 0
+    current = ""
+    for character in raw:
+        if character in "<([":
+            depth += 1
+        elif character in ">)]":
+            depth -= 1
+        if character == "," and depth == 0:
+            pieces.append(current)
+            current = ""
+            continue
+        current += character
+    if current.strip():
+        pieces.append(current)
+    return pieces
+
+
+def _render_case(signature: Signature, values: tuple[Value, ...], index: int) -> str:
+    """Set up the arguments for one call, make it, and print what came back.
+
+    Sequences are backed by a ``std::vector`` whatever the parameter says:
+    ``vector`` carries its own length, can be empty without becoming an illegal
+    zero-sized array, and hands a plain pointer to an ``int[]`` parameter via
+    ``.data()``. One representation covers both shapes.
+
+    Everything the call could have changed is printed, not only the return
+    value — a ``void`` function's whole answer is in its arguments.
+    """
+    setup: list[str] = []
+    arguments: list[str] = []
+    label: list[str] = []
+
+    for position, (parameter, value) in enumerate(zip(signature.params, values, strict=True)):
+        local = f"a{index}_{position}"
+        if isinstance(value, str):
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            setup.append(f'    std::string {local} = "{escaped}";')
+            arguments.append(local)
+            # Single quotes: this label is pasted inside a C++ double-quoted
+            # literal, and a double quote here would end it early.
+            label.append(f"'{value}'")
+        elif isinstance(value, tuple):
+            literal = ", ".join(str(item) for item in value)
+            setup.append(f"    std::vector<{parameter.element_type}> {local} = {{{literal}}};")
+            arguments.append(local if parameter.is_vector else f"{local}.data()")
+            label.append("[" + ",".join(str(item) for item in value) + "]")
+        else:
+            setup.append(f"    {parameter.element_type} {local} = {value};")
+            arguments.append(local)
+            label.append(str(value))
+
+    call = f"{signature.name}({', '.join(arguments)})"
+    # The result variable shares the per-case prefix with the argument locals
+    # rather than being called `r`. A function named `r` - and single letters
+    # are the norm in the submissions this serves - produced
+    # `auto r = r(...)`, which is "use of 'r' before deduction of 'auto'": the
+    # verifier could never check it, and reported the user's own code as the
+    # thing that failed to compile.
+    returned = f"a{index}_ret"
+    lines = [
+        *setup,
+        f"    auto {returned} = {call};" if signature.returns_value else f"    {call};",
+    ]
+    lines.append(f'    std::cout << "{" | ".join(label)}" << " => ";')
+    if signature.returns_value:
+        lines.append(f'    std::cout << {returned} << " ; ";')
+    # After the call, deliberately: before it, these are the inputs.
+    for position, parameter in enumerate(signature.params):
+        if not parameter.is_output:
+            continue
+        local = f"a{index}_{position}"
+        if isinstance(values[position], tuple):
+            lines.append(f'    for (auto v : {local}) std::cout << v << ",";')
+            lines.append('    std::cout << " ; ";')
+        else:
+            lines.append(f'    std::cout << {local} << " ; ";')
+    lines.append('    std::cout << "\\n";')
+    return "  {\n" + "\n".join(lines) + "\n  }"
+
+
+def _driver(signature: Signature, cases: list[tuple[Value, ...]]) -> str:
+    body = "\n".join(_render_case(signature, values, index) for index, values in enumerate(cases))
+    return f"\n\nint main() {{\n{body}\n  return 0;\n}}\n"
+
+
+def _build_and_run(
+    source: str, workdir: Path, tag: str, timeout: float, compiler: CxxCompiler, runs: int = 3
+) -> tuple[str | None, str, float]:
+    """Compile once, run several times, and keep the fastest run.
+
+    The minimum is the run least disturbed by whatever else the machine was
+    doing: noise can only make a run slower.
+    """
+    path = workdir / f"{tag}.cpp"
+    path.write_text(source, encoding="utf-8")
+    binary = workdir / tag
+    build = subprocess.run(
+        compiler.build_command(path, binary),
+        capture_output=True,
+        cwd=workdir,
+        text=True,
+        timeout=timeout,
+    )
+    if build.returncode != 0:
+        errors = (build.stderr or build.stdout).strip().splitlines()
+        detail = errors[-1][:200] if errors else f"compiler exited {build.returncode}"
+        return None, f"compile failed: {detail}", 0.0
+    executable = compiler.executable_path(binary)
+    if executable is None:
+        return None, "compiler did not produce an executable", 0.0
+    best = float("inf")
+    result = None
+    for _ in range(runs):
+        started = time.perf_counter()
+        try:
+            result = subprocess.run(
+                [str(executable)], capture_output=True, text=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            return None, f"ran longer than {timeout:g}s", timeout
+        best = min(best, time.perf_counter() - started)
+        if result.returncode != 0:
+            return None, f"exited {result.returncode}", best
+    return result.stdout, "", best
+
+
+#: Sequence inputs in the order a reviewer would try them. The empty case earns
+#: its place: it is where ``size() - 1`` on an unsigned type wraps.
+BUFFER_CASES: tuple[tuple[int, ...], ...] = (
+    (),
+    (7,),
+    (1, 2, 3, 4),
+    (4, 3, 2, 1),
+    (5, 1, 5, 1, 5),
+    (-3, 8, 0, -1, 2),
+)
+
+#: Text inputs chosen the same way: empty, single, palindrome, mixed case with
+#: a space, repeats.
+STRING_CASES: tuple[str, ...] = ("", "a", "abc", "racecar", "Hello World", "aabbcc")
+
+
+#: Scalar names that mean "how many", and the two halves of "where". An index
+#: filled as though it were a length reads past the end: for
+#: `r(int a[], int l, int h)` the old rule gave `l = len(a)`, so a four-element
+#: array was called with `l = 4` and the function returned `a[4]`. Both versions
+#: then read out of bounds and the comparison comes down to whatever happened to
+#: be in memory, which can agree and mean nothing.
+_LENGTH_NAMES = frozenset({"n", "m", "size", "len", "length", "count", "num", "sz", "total"})
+_LOW_NAMES = frozenset({"l", "lo", "low", "left", "start", "begin", "first", "from", "i"})
+_HIGH_NAMES = frozenset({"h", "hi", "high", "right", "end", "last", "to", "j"})
+
+
+def _indexes_a_sequence(signature: Signature) -> bool:
+    """Whether some scalar parameter is named like an index into a sequence."""
+    if not any(p.is_buffer or p.is_string for p in signature.params):
+        return False
+    return any(
+        p.name.lower() in (_LOW_NAMES | _HIGH_NAMES)
+        for p in signature.params
+        if not (p.is_buffer or p.is_string)
+    )
+
+
+#: How far into the sequence a low index starts, one entry per correctness case.
+#: Pinning a low index to 0 would repeat the bug this guards: a parameter named
+#: `from`, `start` or `l` would take one value in every case, so a rewrite that
+#: ignores it passes. Clamped against the sequence length at use.
+_LOW_OFFSETS: tuple[int, ...] = (0, 0, 1, 0, 2, 1)
+
+
+def _fill(
+    signature: Signature, buffer: tuple[int, ...], scalar: int, text: str, low: int = 0
+) -> tuple[Value, ...]:
+    """Build one argument tuple, sizing any length parameter from its sequence.
+
+    An integer directly after a sequence is that sequence's length —
+    ``f(int arr[], int n)`` is close to universal. A length invented
+    independently would index past the end, where the comparison stops
+    measuring the code and starts measuring undefined behaviour.
+
+    Misreading the convention is safe in the direction that matters: if that
+    integer was really something else, both versions still receive the same
+    small value, so the verdict stays sound and only the input gets less
+    interesting. Guessing too *large* is the dangerous error, and deriving the
+    value from the sequence cannot do that.
+    """
+    values: list[Value] = []
+    previous_length: int | None = None
+    sequence_length: int | None = None
+    for parameter in signature.params:
+        if parameter.is_string:
+            values.append(text)
+            previous_length = sequence_length = len(text)
+        elif parameter.is_buffer:
+            values.append(buffer)
+            previous_length = sequence_length = len(buffer)
+        elif parameter.element_type == "double":
+            values.append(scalar)
+        elif sequence_length is not None and parameter.name.lower() in _LOW_NAMES:
+            values.append(min(low, max(0, sequence_length - 1)))
+        elif sequence_length is not None and parameter.name.lower() in _HIGH_NAMES:
+            # The last valid subscript, not the length: a closed range is what
+            # `l`/`h` pairs mean in the submissions this serves.
+            values.append(max(0, sequence_length - 1))
+        elif previous_length is not None:
+            values.append(previous_length)
+            previous_length = None
+        else:
+            values.append(scalar)
+    return tuple(values)
+
+
+def _cases(signature: Signature) -> tuple[list[tuple[Value, ...]], tuple[Value, ...]]:
+    """Small inputs for correctness, and one large input for timing.
+
+    They have to be different. Small inputs finish faster than a process takes
+    to start, so timing them measures the operating system; large inputs make
+    an expensive implementation visible. For sequences the same argument
+    applies to *length*: a quadratic sort and a linearithmic one are
+    indistinguishable on four elements.
+    """
+    if any(p.is_buffer or p.is_string for p in signature.params):
+        triples = list(zip(BUFFER_CASES, STRING_CASES, _LOW_OFFSETS, strict=True))
+        if _indexes_a_sequence(signature):
+            # There is no valid subscript into an empty sequence, so the empty
+            # case would compare two undefined behaviours. It earns its place
+            # for every other shape and is dropped only here.
+            triples = [(b, s, low) for b, s, low in triples if b and s]
+        small = [_fill(signature, b, 2, t, low) for b, t, low in triples]
+        large = tuple((index * 7919) % 2003 for index in range(1500))
+        return small, _fill(signature, large, 2, "abcdefghij" * 150, 0)
+
+    width = len(signature.params)
+    if width == 1:
+        return [(n,) for n in (0, 1, 2, 3, 5, 10, 15, 20)], (38,)
+    if width == 2:
+        return [(1, 1), (1, 5), (2, 3), (4, 4), (6, 5), (10, 8)], (18, 16)
+    return [tuple(1 for _ in range(width)), tuple(3 for _ in range(width))], tuple(
+        8 for _ in range(width)
+    )
+
+
+def check(original: str, optimized: str, *, timeout: float = 20.0) -> EquivalenceResult:
+    """Decide whether ``optimized`` may be shown to the user.
+
+    :param original: the code the user submitted.
+    :param optimized: the model's proposed rewrite.
+    :param timeout: seconds allowed for any single compile or run.
+    :return: the verdict; ``equivalent`` is false unless proven otherwise.
+    """
+    if not optimized.strip() or optimized.strip() == original.strip():
+        return EquivalenceResult(reason="no rewrite was offered")
+    compiler = find_cxx_compiler()
+    if compiler is None:
+        return EquivalenceResult(reason="no C++ compiler on this host")
+
+    signature = parse_signature(original)
+    if signature is None:
+        return EquivalenceResult(reason="could not read a function signature")
+    if not signature.drivable:
+        if signature.params and not signature.observable:
+            why = (
+                "it returns nothing and takes every argument by value, so a call "
+                "leaves nothing to compare"
+            )
+        elif not signature.params:
+            why = "it takes no arguments, so there is nothing to vary"
+        elif any(p.is_multidimensional for p in signature.params):
+            names = ", ".join(p.name for p in signature.params if p.is_multidimensional)
+            why = (
+                f"it takes a multidimensional array ({names}); the driver can only "
+                "supply a flat sequence"
+            )
+        else:
+            why = "its arguments are not shapes the driver can supply values for"
+        return EquivalenceResult(reason=f"cannot check {signature.name}(...): {why}")
+
+    cases, timing_case = _cases(signature)
+    driver = _driver(signature, cases)
+    timing_driver = _driver(signature, [timing_case])
+    result = EquivalenceResult(cases=len(cases))
+
+    with tempfile.TemporaryDirectory() as directory:
+        workdir = Path(directory)
+        expected, error, _ = _build_and_run(
+            HEADERS + original + driver, workdir, "orig", timeout, compiler
+        )
+        if expected is None:
+            return EquivalenceResult(reason=f"original {error}", cases=len(cases))
+        actual, error, _ = _build_and_run(
+            HEADERS + optimized + driver, workdir, "opt", timeout, compiler
+        )
+        if actual is None:
+            return EquivalenceResult(reason=f"rewrite {error}", cases=len(cases))
+
+        result.verified = True
+        expected_lines = expected.strip().split("\n")
+        actual_lines = actual.strip().split("\n")
+        result.agreed = sum(
+            1
+            for index, line in enumerate(expected_lines)
+            if index < len(actual_lines) and actual_lines[index] == line
+        )
+        result.equivalent = result.agreed == result.cases
+        if not result.equivalent:
+            return result
+
+        empty, _, baseline = _build_and_run(
+            HEADERS + "int main(){return 0;}", workdir, "base", timeout, compiler
+        )
+        baseline = baseline if empty is not None else 0.0
+        _, _, slow = _build_and_run(
+            HEADERS + original + timing_driver, workdir, "slow", timeout, compiler
+        )
+        _, _, fast = _build_and_run(
+            HEADERS + optimized + timing_driver, workdir, "fast", timeout, compiler
+        )
+
+    original_work = max(0.0, slow - baseline)
+    optimized_work = max(0.0, fast - baseline)
+    result.timing_reliable = original_work >= NOISE_FLOOR_SECONDS
+    if result.timing_reliable:
+        result.speedup = original_work / max(optimized_work, NOISE_FLOOR_SECONDS)
+    return result
