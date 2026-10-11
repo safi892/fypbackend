@@ -365,12 +365,21 @@ def optimize(
 
     if result.changed and optimized_code:
         try:
+            # Strip ephemeral single-line function labels so full Doxygen docblocks attach cleanly
+            import re
+            cleaned_code = re.sub(
+                r"(?m)^[ \t]*//\s*(?:Define the function\s+\w+|Iterative stack rewrite[^\n]*)[ \t]*\n?",
+                "",
+                optimized_code,
+            )
             # Ensure multi-line function documentation comments (/** ... */) are attached above each function
             from app.model_processing.anchors import render_commented_code
             from app.model_processing.function_comments import attach_function_doc_comments
-            doc_anchors = attach_function_doc_comments(optimized_code, [], explanation_text)
+            doc_anchors = attach_function_doc_comments(cleaned_code, [], explanation_text)
             if doc_anchors:
-                optimized_code = render_commented_code(optimized_code, doc_anchors)
+                optimized_code = render_commented_code(cleaned_code, doc_anchors)
+            else:
+                optimized_code = cleaned_code
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning("Failed to attach doc comments on optimize: %s", exc)

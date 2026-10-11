@@ -254,9 +254,15 @@ def attach_function_doc_comments(
             continue
 
         # If user code already has a leading comment/docblock, don't overwrite
+        # unless it is an automated generic placeholder comment like '// Define the function'
         has_comment, has_doc = _has_leading_comment(fn)
-        if has_comment or has_doc:
+        if has_doc:
             continue
+        if has_comment:
+            prev = fn.prev_sibling
+            prev_text = cpp_parser.node_text(prev).strip() if prev else ""
+            if not re.match(r"^//\s*(?:Define the function|Iterative stack rewrite)", prev_text):
+                continue
 
         start_line = fn.start_point[0] + 1
         if start_line in existing_before:
