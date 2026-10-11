@@ -62,3 +62,4 @@ tools/
 
 # OS files
 .DS_Store
+android_logs.md

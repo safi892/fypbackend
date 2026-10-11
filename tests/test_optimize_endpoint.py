@@ -40,7 +40,8 @@ def test_a_verified_rewrite_is_returned_with_its_evidence(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["code"] == FASTER
+    assert "return a;" in body["code"]
+    assert "//" in body["code"]  # Rule-based comments added to optimized rewrite
     assert body["changed"] is True and body["verified"] is True
     assert body["speedup"] == 12.5
     assert body["input_code"] == NAIVE
@@ -92,6 +93,20 @@ def test_empty_code_is_rejected_by_validation(client: TestClient, auth_headers: 
     response = client.post("/optimize", json={"code": ""}, headers=auth_headers)
 
     assert response.status_code == 422
+
+
+def test_non_recursive_code_returns_safe_note(client: TestClient, auth_headers: dict[str, str]):
+    """When code is already iterative, optimize_checked should short-circuit with a clear note."""
+    iterative_code = "int sum(int arr[], int n) { int s = 0; for (int i = 0; i < n; ++i) s += arr[i]; return s; }"
+    response = client.post(
+        "/optimize",
+        json={"code": iterative_code, "mode": "loop"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["changed"] is False
+    assert "No recursive function detected" in body["note"]
 
 
 # --- readiness ------------------------------------------------------------------ #

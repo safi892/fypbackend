@@ -24,8 +24,8 @@ def test_playground_serves_assets_and_allows_guest_analysis(client, monkeypatch)
     assert "auth-dialog" not in response.text
     assert 'id="code-heading"' in response.text
     assert 'id="commented-code"' in response.text
-    assert 'id="optimized-code"' not in response.text
-    assert 'id="optimize-button"' not in response.text
+    assert 'id="optimized-code"' in response.text
+    assert 'id="optimize-button"' in response.text
     for path, content_type in [("/static/app.js", "javascript"), ("/static/style.css", "text/css")]:
         asset = client.get(path)
         assert asset.status_code == 200

@@ -239,3 +239,4 @@ class OptimizeResponse(BaseModel):
         0.0, description="Measured ratio, 0 when the work was too small to time reliably"
     )
     note: str = Field("", description="Human-readable summary of what was checked")
+    explanation: str = Field("", description="Plain-language explanation of what the code does")

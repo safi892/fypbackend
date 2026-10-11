@@ -597,10 +597,11 @@ def _cases(signature: Signature) -> tuple[list[tuple[Value, ...]], tuple[Value, 
     """
     if any(p.is_buffer or p.is_string for p in signature.params):
         triples = list(zip(BUFFER_CASES, STRING_CASES, _LOW_OFFSETS, strict=True))
-        if _indexes_a_sequence(signature):
-            # There is no valid subscript into an empty sequence, so the empty
-            # case would compare two undefined behaviours. It earns its place
-            # for every other shape and is dropped only here.
+        if _indexes_a_sequence(signature) or any(p.is_array for p in signature.params):
+            # There is no valid subscript into an empty sequence or raw C-array
+            # parameter (e.g. `int a[]`), so the empty buffer case would compare
+            # two undefined behaviours or crash on `a[0]`. It earns its place
+            # for std::vector-based shapes and is dropped here.
             triples = [(b, s, low) for b, s, low in triples if b and s]
         small = [_fill(signature, b, 2, t, low) for b, t, low in triples]
         large = tuple((index * 7919) % 2003 for index in range(1500))

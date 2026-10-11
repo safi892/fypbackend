@@ -90,6 +90,8 @@ class OptimizationResult:
     verified: bool = False
     speedup: float = 0.0
     note: str = ""
+    isolated_proposal: str = ""
+    target_fn_name: str = ""
 
 
 def _strip_comments(code: str) -> str:
@@ -98,7 +100,7 @@ def _strip_comments(code: str) -> str:
     return re.sub(r"//[^\n]*", "", without_block)
 
 
-def _structural_check(original: str, proposal: str) -> tuple[bool, str]:
+def _structural_check(original: str, proposal: str, target_fn: str | None = None) -> tuple[bool, str]:
     """Structural fallback when execution testing cannot run (e.g. 2D array params).
 
     Checks three things without compiling:
@@ -108,14 +110,24 @@ def _structural_check(original: str, proposal: str) -> tuple[bool, str]:
 
     Returns (passed, note) where note explains what was/wasn't found.
     """
-    # Extract the function name from the original (first word-boundary identifier
-    # before the first '(').
-    name_match = re.search(r"\b([A-Za-z_]\w*)\s*\(", original)
-    if not name_match:
-        return False, "could not determine function name for structural check"
-    fn_name = name_match.group(1)
-    if fn_name in {"if", "for", "while", "switch", "return", "main"}:
-        return False, "could not determine function name for structural check"
+    fn_name = target_fn
+    if not fn_name:
+        # Check AST analysis functions for a recursive function first
+        analysis = analyze_code(original)
+        if analysis and analysis.functions:
+            rec_fns = [f.name for f in analysis.functions if f.recursive]
+            if rec_fns:
+                fn_name = rec_fns[0]
+
+    if not fn_name:
+        # Extract the function name from the original (first word-boundary identifier
+        # before the first '(').
+        name_match = re.search(r"\b([A-Za-z_]\w*)\s*\(", original)
+        if not name_match:
+            return False, "could not determine function name for structural check"
+        fn_name = name_match.group(1)
+        if fn_name in {"if", "for", "while", "switch", "return", "main"}:
+            return False, "could not determine function name for structural check"
 
     # Count self-calls: occurrences of `fn_name(` that are not the definition line.
     def _count_calls(code: str) -> int:
@@ -275,38 +287,66 @@ def optimize_checked(
     :param allow_unverified: if True, return model proposal even when driver cannot auto-test parameters.
     :return: the code to show, plus whether it was changed and checked.
     """
+    # If the user specifically requested a loop conversion (recursion-to-loop),
+    # check statically first. If there is no recursion, short-circuit immediately
+    # with a clear note. This avoids 15-30 seconds of wasteful model inference and
+    # prevents the model from hallucinating rewrites on code that is already iterative.
+    analysis: StaticAnalysis | None = analyze_code(code)
+    if mode in {"loop", "iterate"} and (analysis is None or not analysis.recursive):
+        return OptimizationResult(
+            code=code,
+            changed=False,
+            verified=True,
+            speedup=1.0,
+            note="No recursive function detected. The code already uses iteration or sequential logic.",
+        )
+
+    # If the file has multiple functions and only a subset is recursive, isolate the recursive
+    # function so the model focuses directly on it instead of wandering across unrelated functions.
+    rec_fns = [f for f in (analysis.functions if analysis else []) if f.recursive]
+    lines = code.splitlines()
+    single_rec_target = None
+    if mode in {"auto", "loop", "iterate"} and len(rec_fns) == 1 and len(analysis.functions) > 1:
+        target_fn_info = rec_fns[0]
+        target_code = "\n".join(lines[target_fn_info.start_line - 1 : target_fn_info.end_line])
+        single_rec_target = target_fn_info
+    else:
+        target_code = code
+
     if MODEL_BACKEND == "qwen_gguf":
         from app.services import qwen_service
 
         try:
             if mode in {"loop", "iterate"}:
-                proposal = qwen_service.iterate(code)
+                proposal = qwen_service.iterate(target_code)
             elif mode == "dp":
-                proposal = qwen_service.optimize(code)
+                proposal = qwen_service.optimize(target_code)
             else:
-                analysis: StaticAnalysis | None = analyze_code(code)
                 if analysis is not None and analysis.recursive:
-                    proposal = qwen_service.iterate(code)
+                    proposal = qwen_service.iterate(target_code)
                 else:
-                    proposal = qwen_service.optimize(code)
+                    proposal = qwen_service.optimize(target_code)
         except qwen_service.LlamaServerUnavailable as exc:
             LOGGER.error("optimizer: llama-server unavailable: %s", exc)
             proposal = ""
     else:
-        analysis = analyze_code(code)
-        prompt = build_optimization_prompt(code, analysis)
+        prompt = build_optimization_prompt(target_code, analysis)
         raw = generate_text(prompt, max_new_tokens=RAW_MAX_NEW_TOKENS, num_beams=RAW_NUM_BEAMS)
         proposal = _extract_code(raw)
 
-    if not proposal or proposal.strip() == code.strip():
-        proposal = _transform_accumulator_recursion(code) or ""
+    if not proposal or proposal.strip() == target_code.strip():
+        proposal = _transform_accumulator_recursion(target_code) or ""
         if not proposal:
             return OptimizationResult(code=code, note="no rewrite was offered")
 
     # If the proposal still left recursive self-calls, attempt accumulator transform fallback
-    name_match = re.search(r"\b([A-Za-z_]\w*)\s*\(", code)
-    if name_match:
-        fn_name = name_match.group(1)
+    fn_name = single_rec_target.name if single_rec_target else None
+    if not fn_name:
+        name_match = re.search(r"\b([A-Za-z_]\w*)\s*\(", target_code)
+        if name_match:
+            fn_name = name_match.group(1)
+
+    if fn_name:
         clean_prop = _strip_comments(proposal)
         call_lines = [
             l for l in clean_prop.splitlines()
@@ -314,29 +354,50 @@ def optimize_checked(
             and not re.search(rf"^\s*\w[\w\s\*&<>,]*\b{re.escape(fn_name)}\s*\(", l)
         ]
         if len(call_lines) > 0:
-            fallback = _transform_accumulator_recursion(code)
+            fallback = _transform_accumulator_recursion(target_code)
             if fallback:
                 proposal = fallback
 
-    verdict = equivalence.check(code, proposal)
+    isolated_candidate = proposal if not single_rec_target else ""
+    target_fn_id = single_rec_target.name if single_rec_target else ""
+    if single_rec_target:
+        isolated_candidate = proposal
+
+    # If we isolated a single recursive function from a multi-function file, stitch the proposal
+    # back into the original file so the entire translation unit remains intact.
+    if single_rec_target:
+        stitched_lines = (
+            lines[: single_rec_target.start_line - 1]
+            + proposal.splitlines()
+            + lines[single_rec_target.end_line :]
+        )
+        full_proposal = "\n".join(stitched_lines)
+    else:
+        full_proposal = proposal
+
+    verdict = equivalence.check(code, full_proposal)
     if verdict.equivalent:
         return OptimizationResult(
-            code=proposal,
+            code=full_proposal,
             changed=True,
             verified=True,
             speedup=verdict.speedup,
             note=verdict.summary(),
+            isolated_proposal=isolated_candidate,
+            target_fn_name=target_fn_id,
         )
     if not verdict.verified:
-        struct_ok, struct_note = _structural_check(code, proposal)
+        struct_ok, struct_note = _structural_check(code, full_proposal)
         combined_note = f"{verdict.summary()} | structural: {struct_note}"
         LOGGER.warning("optimizer: execution unverifiable — %s", combined_note)
         if allow_unverified or struct_ok:
             return OptimizationResult(
-                code=proposal,
+                code=full_proposal,
                 changed=True,
                 verified=struct_ok,
                 note=f"Candidate generated ({combined_note})",
+                isolated_proposal=isolated_candidate,
+                target_fn_name=target_fn_id,
             )
         return OptimizationResult(code=code, note=combined_note)
 

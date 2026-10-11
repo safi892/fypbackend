@@ -25,6 +25,9 @@ nav a:hover { color: var(--blue); }
 .primary { background: var(--blue); color: white; }
 .primary:hover { background: #1b43b3; }
 .primary span { margin-left: 20px; }
+.button-optimize { background: #0f766e; color: white; display: inline-flex; align-items: center; gap: 6px; }
+.button-optimize:hover { background: #0d5f58; }
+.button-optimize:disabled { background: #e2e7ef; color: #637087; cursor: not-allowed; }
 .text-button { background: transparent; border: 0; color: #345c9b; padding: 8px; min-height: 40px; font-size: 13px; font-weight: 600; border-radius: 6px; }
 .text-button:hover { background: #eaf0f9; }
 main { max-width: 1540px; margin: 0 auto; padding: 44px 4% 20px; }
@@ -95,6 +98,9 @@ details { margin-top: 24px; color: var(--muted); font-size: 12px; }
 .copy-btn:hover { background: #e3ecf8; border-color: #9cb5dc; color: #173766; }
 .copy-btn.copied { background: #e6f4ea !important; color: #137333 !important; border-color: #34a853 !important; box-shadow: 0 0 0 2px rgba(52, 168, 83, 0.18); }
 .copy-btn.copy-failed { background: #fce8e6 !important; color: #c5221f !important; border-color: #ea4335 !important; }
+.tab-button { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 6px 14px; font-size: 13px; font-weight: 600; color: #59677c; cursor: pointer; transition: all 0.15s ease-in-out; }
+.tab-button:hover { background: #eaf0f9; color: #1e293b; }
+.tab-button.active { background: #e8effd; color: var(--blue); border-color: #c5d7fa; font-weight: 700; }
 summary { padding: 8px 0; }
 #raw-response { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 350px; overflow: auto; }
 @media (min-width: 1600px) { .code-editor { height: 440px; } .results-panel { min-height: 724px; } }

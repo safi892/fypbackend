@@ -132,8 +132,31 @@ def extract_function_description(
                 return clean[:1].upper() + clean[1:] + "."
 
     # Fallback to AST heuristics
-    if fn_node is not None and _is_recursive(fn_node, fn_name):
-        return f"Recursively processes input for function {fn_name}."
+    if fn_node is not None:
+        body = fn_node.child_by_field_name("body")
+        body_text = cpp_parser.node_text(body) if body else ""
+        calls = _callees(body, fn_name)
+        if calls:
+            if len(calls) == 3:
+                return "Combines these three results."
+            calls_list = ", ".join(calls)
+            return f"Combines results from {calls_list}."
+        if _is_recursive(fn_node, fn_name):
+            if "+" in body_text and ("return" in body_text):
+                return "Recursively sums the elements."
+            return f"Recursively processes input for function {fn_name}."
+
+        loops = list(cpp_parser.iter_descendants(body, _LOOP_TYPES)) if body else []
+        conds = list(cpp_parser.iter_descendants(body, _CONDITION_TYPES)) if body else []
+        if loops:
+            for cond in conds:
+                cond_text = cpp_parser.node_text(cond)
+                if ">" in cond_text:
+                    return "Finds the maximum element."
+                if "<" in cond_text:
+                    return "Finds the minimum element."
+            if "+=" in body_text or re.search(r"\b(sum|total)\b", body_text):
+                return "Computes the sum of elements."
 
     return f"Computes and returns result for function {fn_name}."
 

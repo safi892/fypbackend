@@ -12,6 +12,10 @@ from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.model_processing.anchors import Anchor, render_commented_code
 from app.model_processing.autofix import suggest_quick_fix
+from app.model_processing.comment_rules import (
+    generate_rule_based_comments,
+    has_meaningful_comments,
+)
 from app.model_processing.statement_comments import detect_suspicious_logic
 from app.model_processing.syntax_check import check_cpp_syntax
 from app.parsers import cpp_parser
@@ -307,13 +311,81 @@ def optimize(
         )
     except TypeError:
         result = optimization_service.optimize_checked(payload.code)
+
+    optimized_code = result.code
+    if result.changed and optimized_code:
+        try:
+            # If Qwen GGUF backend is configured, generate Option A (LLM) comments:
+            # 1. Annotate the original full code with LLM comments
+            # 2. Annotate ONLY the rewritten isolated function with LLM comments
+            # 3. Splice the newly commented loop into the full commented code
+            from app.core.config import MODEL_BACKEND
+            if MODEL_BACKEND == "qwen_gguf" and result.isolated_proposal and result.target_fn_name:
+                import re
+                from app.services import qwen_service
+                from app.model_processing.anchors import render_commented_code
+
+                # Comment the original code
+                orig_anchors, _, _ = qwen_service.annotate(payload.code)
+                full_commented = render_commented_code(payload.code, orig_anchors)
+
+                # Comment ONLY the rewritten isolated function
+                isolated_anchors, _, _ = qwen_service.annotate(result.isolated_proposal)
+                commented_isolated = render_commented_code(result.isolated_proposal, isolated_anchors)
+
+                # Splice commented isolated loop in place of the old recursive function
+                fn_name = result.target_fn_name
+                fn_pattern = rf"(/\*\*[\s\S]*?\*/\s*)?[A-Za-z_]\w*[\s\*&]+\b{re.escape(fn_name)}\s*\([^)]*\)\s*\{{[\s\S]*?\n\}}"
+                spliced = re.sub(fn_pattern, commented_isolated, full_commented)
+                if spliced and fn_name in spliced:
+                    optimized_code = spliced
+
+            # Fallback to general comment rules if not yet commented
+            if not has_meaningful_comments(optimized_code):
+                optimized_code = generate_rule_based_comments(optimized_code)
+
+            # Ensure multi-line function documentation comments (/** ... */) are attached above each function
+            from app.model_processing.anchors import render_commented_code
+            from app.model_processing.function_comments import attach_function_doc_comments
+            doc_anchors = attach_function_doc_comments(optimized_code, [], "")
+            if doc_anchors:
+                optimized_code = render_commented_code(optimized_code, doc_anchors)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to generate AI comments on optimize: %s", exc)
+            if not has_meaningful_comments(optimized_code):
+                optimized_code = generate_rule_based_comments(optimized_code)
+            try:
+                from app.model_processing.anchors import render_commented_code
+                from app.model_processing.function_comments import attach_function_doc_comments
+                doc_anchors = attach_function_doc_comments(optimized_code, [], "")
+                if doc_anchors:
+                    optimized_code = render_commented_code(optimized_code, doc_anchors)
+            except Exception:
+                pass
+
+    explanation_text = ""
+    try:
+        from app.core.config import MODEL_BACKEND
+        if MODEL_BACKEND == "qwen_gguf":
+            from app.services import qwen_service
+            raw_expl = qwen_service.explain(optimized_code)
+            explanation_text = explanation_service.generate(optimized_code, raw_expl)
+        else:
+            explanation_text = explanation_service.generate(optimized_code)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Failed to generate explanation for optimize: %s", exc)
+        explanation_text = explanation_service.generate(optimized_code)
+
     return OptimizeResponse(
         input_code=payload.code.strip(),
-        code=result.code,
+        code=optimized_code,
         changed=result.changed,
         verified=result.verified,
         speedup=round(result.speedup, 2),
         note=result.note,
+        explanation=explanation_text,
     )
 
 
