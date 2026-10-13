@@ -85,6 +85,15 @@ int add(int a, int b) {
               </div>
             </div>
             <p id="optimization-note" class="muted" style="margin: 0 0 10px; font-size: 13px;" hidden></p>
+            <div id="diff-wrap" hidden>
+              <h4 style="margin: 0 0 6px; font-size: 13px;">Before and after</h4>
+              <p class="diff-legend">
+                <span><span class="swatch sw-del"></span>removed</span>
+                <span><span class="swatch sw-add"></span>added</span>
+                <span>unmarked lines are unchanged</span>
+              </p>
+              <div class="diff"><table id="diff-table"><tbody></tbody></table></div>
+            </div>
             <div id="change-list-wrap" hidden style="margin: 0 0 12px;">
               <h4 style="margin: 0 0 6px; font-size: 13px;">What changed, and why</h4>
               <ul id="change-list" style="margin: 0; padding-left: 18px; font-size: 13px;"></ul>

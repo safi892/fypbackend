@@ -116,3 +116,38 @@ def test_optimize_only_variables_are_not_used_in_the_analyze_handler():
         if "optData" in line or "defects" in line
     ]
     assert not early, f"optimize-only variables referenced at line(s) {early}"
+
+
+def test_every_const_in_the_optimize_handler_is_declared_before_it_is_used():
+    """A `const` used above its declaration throws at runtime, not at parse time.
+
+    `node --check` passes it, the Python suite never executes it, and the page
+    fails with a ReferenceError the moment the button is pressed. This has now
+    happened twice while editing this handler.
+    """
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "web" / "app.js").read_text("utf-8")
+    lines = source.split("\n")
+    start = next(i for i, line in enumerate(lines) if "await request('/optimize'" in line)
+    end = next((i for i in range(start, len(lines)) if lines[i].startswith("}")), len(lines))
+    block = lines[start:end]
+
+    for index, line in enumerate(block):
+        # Only the handler's own top-level consts: exactly one indent level.
+        # A `const` inside a nested block has its own scope, and this flat scan
+        # cannot model that - it would flag `const code` in a loop body against
+        # an unrelated `optData.code` higher up.
+        match = re.match(r"^    const\s+([A-Za-z_$][\w$]*)\s*=", line)
+        if not match:
+            continue
+        name = match.group(1)
+        # Not preceded by a dot, so `optData.code` is not a use of `code`.
+        pattern = rf"(?<![.\w$]){re.escape(name)}\b"
+        earlier = [
+            start + i + 1
+            for i, candidate in enumerate(block[:index])
+            if re.search(pattern, candidate)
+        ]
+        assert not earlier, f"`{name}` used at line(s) {earlier} before line {start + index + 1}"

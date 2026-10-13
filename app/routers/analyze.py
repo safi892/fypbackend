@@ -26,6 +26,7 @@ from app.schemas.analyze import (
     AnalyzeResponse,
     AnchorStats,
     ChangeExplanation,
+    DiffRow,
     CodeFixEdit,
     CodeValidationRequest,
     CodeValidationResponse,
@@ -367,41 +368,66 @@ def optimize(
         result = optimization_service.optimize_checked(payload.code)
 
     optimized_code = result.code
-    if result.changed and optimized_code:
+    commented_code = ""
+    # Commenting runs whether or not a rewrite was accepted. It used to be gated
+    # on `changed`, which was invisible while almost every proposal was
+    # accepted - and became visible the moment the gate started correctly
+    # refusing unexaminable ones: the page went from commented code to raw
+    # source with no explanation. The comments describe the code being shown,
+    # so they are worth having either way.
+    if optimized_code:
         try:
-            # If Qwen GGUF backend is configured, generate Option A (LLM) comments:
-            # 1. Annotate the original full code with LLM comments
-            # 2. Annotate ONLY the rewritten isolated function with LLM comments
-            # 3. Splice the newly commented loop into the full commented code
             from app.core.config import MODEL_BACKEND
-            if MODEL_BACKEND == "qwen_gguf" and result.isolated_proposal and result.target_fn_name:
+
+            from app.model_processing.anchors import render_commented_code
+            from app.services import qwen_service
+
+            if (
+                result.changed
+                and MODEL_BACKEND == "qwen_gguf"
+                and result.isolated_proposal
+                and result.target_fn_name
+            ):
                 import re
 
-                from app.model_processing.anchors import render_commented_code
-                from app.services import qwen_service
-
-                # Comment the original code
+                # Comment the original, comment the rewritten function on its
+                # own, then splice the second into the first so the rest of the
+                # file keeps the comments it already earned.
                 orig_anchors, _, _ = qwen_service.annotate(payload.code)
                 full_commented = render_commented_code(payload.code, orig_anchors)
 
-                # Comment ONLY the rewritten isolated function
                 isolated_anchors, _, _ = qwen_service.annotate(result.isolated_proposal)
-                commented_isolated = render_commented_code(result.isolated_proposal, isolated_anchors)
+                commented_isolated = render_commented_code(
+                    result.isolated_proposal, isolated_anchors
+                )
 
-                # Splice commented isolated loop in place of the old recursive function
                 fn_name = result.target_fn_name
-                fn_pattern = rf"(/\*\*[\s\S]*?\*/\s*)?[A-Za-z_]\w*[\s\*&]+\b{re.escape(fn_name)}\s*\([^)]*\)\s*\{{[\s\S]*?\n\}}"
+                fn_pattern = (
+                    rf"(/\*\*[\s\S]*?\*/\s*)?[A-Za-z_]\w*[\s\*&]+\b{re.escape(fn_name)}"
+                    rf"\s*\([^)]*\)\s*\{{[\s\S]*?\n\}}"
+                )
                 spliced = re.sub(fn_pattern, commented_isolated, full_commented)
                 if spliced and fn_name in spliced:
                     optimized_code = spliced
+            elif not result.changed and MODEL_BACKEND == "qwen_gguf":
+                # Nothing was rewritten, so annotate what the user sent - into
+                # `commented_code`, never into `code`. Two tests pin the promise
+                # that a rejected rewrite hands back the caller's own source
+                # byte-for-byte, and annotating it in place broke both.
+                anchors, _, _ = qwen_service.annotate(result.code)
+                commented_code = render_commented_code(result.code, anchors)
 
-            # Fallback to general comment rules if not yet commented
-            if not has_meaningful_comments(optimized_code):
+            if result.changed and not has_meaningful_comments(optimized_code):
                 optimized_code = generate_rule_based_comments(optimized_code)
+            if not result.changed and not commented_code:
+                commented_code = generate_rule_based_comments(result.code)
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).warning("Failed to generate AI comments on optimize: %s", exc)
-            if not has_meaningful_comments(optimized_code):
+
+            logging.getLogger(__name__).warning(
+                "Failed to generate AI comments on optimize: %s", exc
+            )
+            if result.changed and not has_meaningful_comments(optimized_code):
                 optimized_code = generate_rule_based_comments(optimized_code)
 
     explanation_text = ""
@@ -446,6 +472,7 @@ def optimize(
     # invocation, against the ~25s the model already took.
     changes: list[ChangeExplanation] = []
     changes_summary = ""
+    diff: list[DiffRow] = []
     if result.changed and optimized_code:
         try:
             findings = defect_checks.check(payload.code).findings
@@ -454,6 +481,11 @@ def optimize(
             # restructures a whole function produces dozens of rows, and a wall
             # of them hides the one line that carries a reason.
             changes_summary = change_explanation.summarise(explained)
+            diff = [
+                DiffRow(kind=row.kind, old_line=row.old_line,
+                        new_line=row.new_line, text=row.text)
+                for row in change_explanation.unified(payload.code, optimized_code)
+            ]
             explained = change_explanation.most_informative(explained, limit=10)
             changes = [
                 ChangeExplanation(
@@ -463,7 +495,7 @@ def optimize(
                 for change in explained
             ]
         except Exception:  # noqa: BLE001 - explaining a rewrite must never fail one
-            changes, changes_summary = [], ""
+            changes, changes_summary, diff = [], "", []
 
     return OptimizeResponse(
         input_code=payload.code.strip(),
@@ -475,6 +507,8 @@ def optimize(
         explanation=explanation_text,
         changes=changes,
         changes_summary=changes_summary,
+        commented_code=commented_code or optimized_code,
+        diff=diff,
     )
 
 

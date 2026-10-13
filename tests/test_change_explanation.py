@@ -99,3 +99,40 @@ def test_the_reason_survives_renumbering():
     with_reason = [c for c in changes if c.reason]
     assert with_reason, "the checks found the unused variable but it was not matched"
     assert with_reason[0].code == "int totral = 0;"
+
+
+# --- the coloured diff ------------------------------------------------------- #
+
+def test_a_comment_only_change_is_context_not_a_change():
+    """The model comments nearly every line.
+
+    If those counted as changes the whole function would be red and green, and
+    the one real edit would be invisible — which is exactly what the first
+    version of this did.
+    """
+    from app.services.change_explanation import unified
+
+    original = "int f(int n) {\n    int t = 0;\n    return t + n;\n}"
+    commented = "int f(int n) {\n    int t = 0;   // accumulator\n    return t + n;   // done\n}"
+    assert unified(original, commented) == []
+
+
+def test_the_diff_marks_only_the_real_edit():
+    from app.services.change_explanation import unified
+
+    original = "int f(int n) {\n    int t = 0;\n    int unused = 1;\n    return t + n;\n}"
+    rewritten = "int f(int n) {\n    int t = 0;   // accumulator\n    return t + n;\n}"
+    rows = unified(original, rewritten)
+    marked = [row for row in rows if row.kind != "context"]
+    assert len(marked) == 1
+    assert marked[0].kind == "removed"
+    assert marked[0].text == "int unused = 1;"
+    assert marked[0].old_line == 3 and marked[0].new_line is None
+
+
+def test_an_identical_rewrite_produces_no_diff():
+    from app.services.change_explanation import unified
+
+    code = "int f(int n) {\n    return n;\n}"
+    assert unified(code, code) == []
+    assert unified(code, "") == []

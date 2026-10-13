@@ -141,3 +141,21 @@ summary { padding: 8px 0; }
 .fix-line.after { background: #e9f7ee; color: #286347; }
 .fix-preview-actions { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin-top: 12px; }
 @media (max-width: 520px) { .fix-preview { padding: 16px 18px; } .fix-edit-line { flex-basis: 38px; padding: 8px 6px; } }
+
+/* --- before/after diff ---------------------------------------------------- */
+/* Colour is not the only signal: each row also carries a +/- gutter mark and a
+   screen-reader label, so the diff is still readable without colour vision. */
+.diff { border: 1px solid var(--border); border-radius: 10px; overflow: auto; margin: 0 0 12px; }
+.diff table { border-collapse: collapse; width: 100%; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 12.5px; line-height: 1.75; }
+.diff td { padding: 1px 8px; vertical-align: top; white-space: pre; }
+.diff .ln { width: 1%; text-align: right; color: var(--muted); user-select: none; background: #fafbfc; border-right: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.diff .mark { width: 1%; text-align: center; user-select: none; color: var(--muted); }
+.diff tr.added { background: #e7f6ec; }
+.diff tr.added .mark { color: #14713a; font-weight: 600; }
+.diff tr.removed { background: #fdeceb; }
+.diff tr.removed .mark { color: #b4221c; font-weight: 600; }
+.diff tr.removed td.code { text-decoration-color: #e4b3b0; }
+.diff-legend { font-size: 12px; color: var(--muted); margin: 0 0 12px; display: flex; gap: 14px; align-items: center; }
+.diff-legend span.swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.diff-legend .sw-add { background: #e7f6ec; border: 1px solid #b8e0c6; }
+.diff-legend .sw-del { background: #fdeceb; border: 1px solid #f0bfbc; }

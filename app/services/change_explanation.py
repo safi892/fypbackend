@@ -182,3 +182,70 @@ def most_informative(changes: list[Change], *, limit: int = 10) -> list[Change]:
         return (2, change.line)
 
     return sorted(changes, key=rank)[:limit]
+
+
+@dataclass(frozen=True)
+class DiffRow:
+    """One line of a side-by-side-style diff, ready to colour."""
+
+    #: "context", "added" or "removed".
+    kind: str
+    #: Line number in the original, or None for an added line.
+    old_line: int | None
+    #: Line number in the rewrite, or None for a removed line.
+    new_line: int | None
+    text: str
+
+
+def unified(original: str, rewritten: str, *, context: int = 2) -> list[DiffRow]:
+    """A diff of the real code changes, with a little context around each one.
+
+    Uses the same comment-aware comparison as `explain`, so a line that only
+    gained a trailing `// comment` is context rather than a change. Without
+    that, the model's habit of commenting nearly every line turns the whole
+    function red and green and the actual edit is invisible.
+
+    Blank and comment-only lines are dropped entirely rather than shown as
+    context: they carry no code, and keeping them pushes the real change off
+    the visible area.
+    """
+    if not rewritten.strip():
+        return []
+    before = _code_lines(original)
+    after = _code_lines(rewritten)
+    matcher = difflib.SequenceMatcher(
+        a=[comparable for _, _, comparable in before],
+        b=[comparable for _, _, comparable in after],
+        autojunk=False,
+    )
+    opcodes = matcher.get_opcodes()
+    if all(tag == "equal" for tag, *_ in opcodes):
+        return []
+
+    rows: list[DiffRow] = []
+    for position, (tag, i1, i2, j1, j2) in enumerate(opcodes):
+        if tag == "equal":
+            span = list(range(i1, i2))
+            # Only the lines nearest an actual change earn their place.
+            if position == 0:
+                span = span[-context:]
+            elif position == len(opcodes) - 1:
+                span = span[:context]
+            elif len(span) > context * 2:
+                span = span[:context] + span[-context:]
+            for index in span:
+                old_number, text, _ = before[index]
+                new_number = j1 + (index - i1)
+                rows.append(DiffRow(
+                    kind="context", old_line=old_number,
+                    new_line=after[new_number][0] if new_number < len(after) else None,
+                    text=text,
+                ))
+            continue
+        for index in range(i1, i2):
+            number, text, _ = before[index]
+            rows.append(DiffRow(kind="removed", old_line=number, new_line=None, text=text))
+        for index in range(j1, j2):
+            number, text, _ = after[index]
+            rows.append(DiffRow(kind="added", old_line=None, new_line=number, text=text))
+    return rows

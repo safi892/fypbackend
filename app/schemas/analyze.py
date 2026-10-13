@@ -282,6 +282,15 @@ class ChangeExplanation(BaseModel):
     rule: str | None = Field(None, description="The check that supplied the reason")
 
 
+class DiffRow(BaseModel):
+    """One line of the before/after diff, ready to colour."""
+
+    kind: str = Field(..., description="context | added | removed")
+    old_line: int | None = Field(None, description="Line in the submitted code")
+    new_line: int | None = Field(None, description="Line in the rewrite")
+    text: str
+
+
 class OptimizeResponse(BaseModel):
     """The rewrite, and the evidence for it.
 
@@ -312,4 +321,16 @@ class OptimizeResponse(BaseModel):
     )
     changes_summary: str = Field(
         "", description="One sentence over the list, or empty when nothing changed"
+    )
+    commented_code: str = Field(
+        "",
+        description="The same code annotated for reading. Separate from `code` on "
+        "purpose: when a rewrite is rejected `code` is the caller's own source "
+        "byte-for-byte, and adding comments to it would break that promise.",
+    )
+    diff: list[DiffRow] = Field(
+        default_factory=list,
+        description="Before/after rows with a little context, for colouring. "
+        "Comment-only differences count as context: the model comments nearly "
+        "every line, and marking those as changes hides the real edit.",
     )
