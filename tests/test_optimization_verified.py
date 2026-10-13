@@ -366,3 +366,77 @@ def test_a_rewrite_wrong_only_away_from_the_default_is_rejected():
     result = check(TALLY_FROM, TALLY_IGNORING_THE_DEFAULT)
     assert result.verified, result.reason
     assert not result.equivalent, "a rewrite that ignores `from` must not pass"
+
+
+# --- a submission that is a whole program, which is what students paste ------ #
+
+WHOLE_PROGRAM = """#include <iostream>
+using namespace std;
+bool isEven(int n) {
+    if (n == 0) { return true; }
+    else if (n == 1) { return false; }
+    else { return isEven(n - 2); }
+}
+int main() {
+    int num = 10;
+    if (isEven(num)) { cout << "even"; } else { cout << "odd"; }
+    return 0;
+}"""
+
+#: The loop rewrite /optimize actually produced for it. `x` never changes, so
+#: the loop exits the moment `n` reaches 0 and the `n == 0 -> true` check is
+#: skipped: wrong for every even number.
+WRONG_LOOP = WHOLE_PROGRAM.replace(
+    """bool isEven(int n) {
+    if (n == 0) { return true; }
+    else if (n == 1) { return false; }
+    else { return isEven(n - 2); }
+}""",
+    """bool isEven(int n) {
+    int x = 0;
+    while (x < n) {
+        if (n == 0) { return true; }
+        if (n == 1) { return false; }
+        n -= 2;
+    }
+    return false;
+}""",
+)
+
+CORRECT_LOOP = WHOLE_PROGRAM.replace(
+    """bool isEven(int n) {
+    if (n == 0) { return true; }
+    else if (n == 1) { return false; }
+    else { return isEven(n - 2); }
+}""",
+    """bool isEven(int n) {
+    while (n > 1) { n -= 2; }
+    return n == 0;
+}""",
+)
+
+
+@needs_compiler
+def test_a_submission_that_defines_main_can_still_be_checked():
+    """The driver brings its own `main`, so the submission's has to go.
+
+    Two definitions in one translation unit made the verdict "original compile
+    failed" — blaming the user's code for a collision the harness created.
+    Verification never ran, and because the web client allows unverified
+    candidates the wrong rewrite was displayed as the answer.
+    """
+    result = check(WHOLE_PROGRAM, CORRECT_LOOP)
+    assert result.verified, result.reason
+    assert result.equivalent, result.summary()
+
+
+@needs_compiler
+def test_the_wrong_loop_rewrite_is_now_rejected_rather_than_unverifiable():
+    """The case that motivated it: wrong for every even number.
+
+    Before stripping `main`, this came back "not verified" and was shown anyway.
+    """
+    result = check(WHOLE_PROGRAM, WRONG_LOOP)
+    assert result.verified, result.reason
+    assert not result.equivalent
+    assert result.agreed < result.cases

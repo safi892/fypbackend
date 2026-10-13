@@ -8,8 +8,10 @@ Why orchestrate here (not in the services): keeps each service focused on one
 task and makes the pipeline order explicit and easy to follow/test.
 """
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from app.core.security import bearer_scheme
+from app.model_processing import defect_checks
 from app.model_processing.anchors import Anchor, render_commented_code
 from app.model_processing.autofix import suggest_quick_fix
 from app.model_processing.comment_rules import (
@@ -23,9 +25,13 @@ from app.schemas.analyze import (
     AnalyzeRequest,
     AnalyzeResponse,
     AnchorStats,
+    ChangeExplanation,
     CodeFixEdit,
     CodeValidationRequest,
     CodeValidationResponse,
+    DefectFinding,
+    DefectsRequest,
+    DefectsResponse,
     LineComment,
     OptimizeRequest,
     OptimizeResponse,
@@ -33,6 +39,7 @@ from app.schemas.analyze import (
 )
 from app.schemas.history import HistoryListResponse
 from app.services import (
+    change_explanation,
     comment_service,
     diff_service,
     documentation_service,
@@ -89,6 +96,46 @@ def _validate_cpp_source(code: str, *, suggest_fix: bool = False) -> CodeValidat
             suggested_fix=_suggested_fix(code) if suggest_fix else None,
         )
     return CodeValidationResponse(valid=True, message="C++ syntax checked. Ready to analyze.")
+
+
+@router.post("/defects", response_model=DefectsResponse)
+def defects(request: DefectsRequest) -> DefectsResponse:
+    """Report what the compiler, cppcheck and the parse tree can establish.
+
+    Deliberately does not call the model. Measured on seven planted defect
+    classes, the shipped 1.5B named **one** - as an aside inside an `Input:`
+    line - while these tiers name **seven**, and the model carries a
+    confidently-false description on 30% of answers. Nothing here would be
+    improved by a training run either: these are decidable properties of the
+    source, and the compiler already computes most of them internally.
+
+    No authentication, matching ``/validate-code``: it reads the submitted text,
+    writes nothing and stores nothing, so there is no history to attribute.
+
+    ``run_code`` is off unless asked for. Tier 4 compiles and executes the
+    submission with a timeout as its only restraint and no sandbox, which is a
+    decision for the caller rather than a default.
+
+    :param request: the source, and whether to run it.
+    :return: the findings, the compile error if there is one, and which tiers ran.
+    """
+    report = defect_checks.check(request.code, run_code=request.run_code)
+    return DefectsResponse(
+        input_code=request.code,
+        compile_error=report.compile_error,
+        findings=[
+            DefectFinding(
+                rule=finding.rule,
+                line=finding.line,
+                code=finding.code,
+                message=finding.message,
+                certain=finding.certain,
+                tier=finding.tier,
+            )
+            for finding in report.findings
+        ],
+        tiers_run=defect_checks.tiers_available(),
+    )
 
 
 def _suggested_fix(code: str) -> SuggestedFix | None:
@@ -152,6 +199,9 @@ def _translated_line_comments(items: list[dict[str, object]]) -> list[dict[str, 
 @router.post(
     "/analyze",
     response_model=AnalyzeResponse,
+    # Documentation only: the handler still reads the header itself. This is
+    # what puts the Authorize button on /docs.
+    dependencies=[Depends(bearer_scheme)],
     response_model_include={
         "input_code",
         "commented_code",
@@ -278,7 +328,11 @@ def analyze(
     return response
 
 
-@router.post("/optimize", response_model=OptimizeResponse)
+@router.post(
+    "/optimize",
+    response_model=OptimizeResponse,
+    dependencies=[Depends(bearer_scheme)],
+)
 def optimize(
     payload: OptimizeRequest,
     authorization: str | None = Header(default=None),
@@ -322,8 +376,9 @@ def optimize(
             from app.core.config import MODEL_BACKEND
             if MODEL_BACKEND == "qwen_gguf" and result.isolated_proposal and result.target_fn_name:
                 import re
-                from app.services import qwen_service
+
                 from app.model_processing.anchors import render_commented_code
+                from app.services import qwen_service
 
                 # Comment the original code
                 orig_anchors, _, _ = qwen_service.annotate(payload.code)
@@ -384,6 +439,32 @@ def optimize(
             import logging
             logging.getLogger(__name__).warning("Failed to attach doc comments on optimize: %s", exc)
 
+    # Say what changed and why. The reasons come from the deterministic checks
+    # run against the *original*, not from the model: a line is reported as
+    # removed because the diff says so, and it is given a motive only when the
+    # compiler, cppcheck or the parse tree established one. Costs one compiler
+    # invocation, against the ~25s the model already took.
+    changes: list[ChangeExplanation] = []
+    changes_summary = ""
+    if result.changed and optimized_code:
+        try:
+            findings = defect_checks.check(payload.code).findings
+            explained = change_explanation.explain(payload.code, optimized_code, findings)
+            # The summary counts everything; the list is capped. A rewrite that
+            # restructures a whole function produces dozens of rows, and a wall
+            # of them hides the one line that carries a reason.
+            changes_summary = change_explanation.summarise(explained)
+            explained = change_explanation.most_informative(explained, limit=10)
+            changes = [
+                ChangeExplanation(
+                    kind=change.kind, line=change.line, code=change.code,
+                    reason=change.reason, rule=change.rule,
+                )
+                for change in explained
+            ]
+        except Exception:  # noqa: BLE001 - explaining a rewrite must never fail one
+            changes, changes_summary = [], ""
+
     return OptimizeResponse(
         input_code=payload.code.strip(),
         code=optimized_code,
@@ -392,10 +473,16 @@ def optimize(
         speedup=round(result.speedup, 2),
         note=result.note,
         explanation=explanation_text,
+        changes=changes,
+        changes_summary=changes_summary,
     )
 
 
-@router.get("/analyze/history", response_model=HistoryListResponse)
+@router.get(
+    "/analyze/history",
+    response_model=HistoryListResponse,
+    dependencies=[Depends(bearer_scheme)],
+)
 def analyze_history(
     authorization: str | None = Header(default=None),
     limit: int = Query(default=20, ge=1, le=100),

@@ -89,3 +89,30 @@ def test_validation_offers_no_fix_when_there_is_none_to_trust(client):
     ]:
         data = client.post("/validate-code", json={"code": code}).json()
         assert data["suggested_fix"] is None, code
+
+
+# --- the browser bug the Python suite cannot see ----------------------------- #
+
+def test_optimize_only_variables_are_not_used_in_the_analyze_handler():
+    """`optData` and `defects` exist only after the /optimize call.
+
+    This guards a real regression: rendering code meant for the optimize handler
+    was inserted before the first `$('raw-response')` write, which belongs to
+    *analyze*. The Python suite stayed green while the Analyze button failed in
+    the browser with "optData is not defined" — nothing here executes app.js, so
+    a syntax-valid scope error is invisible to every other test.
+    """
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "app" / "web" / "app.js"
+    lines = source.read_text(encoding="utf-8").split("\n")
+    optimize_call = next(
+        index for index, line in enumerate(lines)
+        if "await request('/optimize'" in line
+    )
+    early = [
+        index + 1
+        for index, line in enumerate(lines[:optimize_call])
+        if "optData" in line or "defects" in line
+    ]
+    assert not early, f"optimize-only variables referenced at line(s) {early}"

@@ -326,7 +326,20 @@ async function runOptimization() {
     $('loading-message').textContent = `Still working · ${Math.floor((performance.now() - started) / 1000)} seconds elapsed.`;
   }, 1000);
   try {
-    const optData = await request('/optimize', { code: submittedCode, source: 'web', mode: 'loop' }, 600000);
+    // `auto`, not `loop`. With `loop`, optimize_checked short-circuits on any
+    // code that is not recursive, so for iterative input the button could only
+    // ever return the input unchanged.
+    const optData = await request('/optimize', { code: submittedCode, source: 'web', mode: 'auto' }, 600000);
+
+    // The checks run regardless, and they are the half that has something to
+    // say about iterative code: an unused variable, a dead branch, a loop that
+    // cannot end. `/optimize` has no opinion on any of those by design.
+    let defects = null;
+    try {
+      defects = await request('/defects', { code: submittedCode }, 60000);
+    } catch (defectError) {
+      defects = null;   // never let the checks fail the optimization
+    }
     result = { optimization: optData, explanation: optData.explanation, commented_code: optData.code };
 
     // Set explanation (from optimize response or fallback)
@@ -351,6 +364,61 @@ async function runOptimization() {
         $('optimization-badge').textContent = 'Already optimal';
         $('optimization-badge').className = 'result-badge';
       }
+    }
+
+    // What the rewrite changed, and why. The reasons are the checks' words, not
+    // the model's, so they can be shown as fact rather than as a suggestion.
+    if (optData.changes && optData.changes.length) {
+      const list = $('change-list');
+      list.innerHTML = '';
+      for (const c of optData.changes) {
+        const item = document.createElement('li');
+        const verb = c.kind === 'removed' ? 'Removed' : 'Added';
+        const code = document.createElement('code');
+        code.textContent = c.code;
+        item.append(`${verb} line ${c.line}: `, code);
+        if (c.reason) {
+          const why = document.createElement('span');
+          why.className = 'muted';
+          why.textContent = ` — ${c.reason}`;
+          item.appendChild(why);
+        }
+        list.appendChild(item);
+      }
+      $('change-summary').textContent = optData.changes_summary || '';
+      $('change-list-wrap').hidden = false;
+    } else if ($('change-list-wrap')) {
+      $('change-list-wrap').hidden = true;
+    }
+
+    if (defects) {
+      const list = $('defect-list');
+      list.innerHTML = '';
+      const findings = defects.compile_error
+        ? [{ line: 0, message: defects.compile_error, rule: 'compile_error', certain: true, tier: 1 }]
+        : defects.findings;
+      for (const f of findings) {
+        const item = document.createElement('li');
+        const where = f.line ? `line ${f.line}` : 'compile';
+        // `certain` is the difference between a proof and a timeout, so it is
+        // shown rather than flattened into one confident voice.
+        const hedge = f.certain ? '' : ' (evidence, not proof)';
+        item.textContent = `${where}: ${f.message}${hedge}`;
+        list.appendChild(item);
+      }
+      if (findings.length) {
+        const ran = Object.entries(defects.tiers_run || {}).filter(([, on]) => on).map(([n]) => n);
+        $('defect-tiers').textContent = `From checks ${ran.join(', ')} of 1-4. No model involved.`;
+        $('defect-findings').hidden = false;
+      } else {
+        $('defect-findings').hidden = true;
+      }
+      if (!optData.changed && !findings.length) {
+        $('optimization-note').textContent =
+          (optData.note ? optData.note + ' ' : '') + 'The checks found nothing to report either.';
+        $('optimization-note').hidden = false;
+      }
+      result.defects = defects;
     }
 
     $('raw-response').textContent = JSON.stringify(result, null, 2);

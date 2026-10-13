@@ -100,6 +100,12 @@ def _strip_comments(code: str) -> str:
     return re.sub(r"//[^\n]*", "", without_block)
 
 
+#: What `_structural_check` says when it could not run at all, as opposed to
+#: running and finding a problem. The difference decides whether a candidate may
+#: be shown: "checked and imperfect" is a judgement call, "never checked" is not.
+_STRUCTURAL_UNAVAILABLE = "could not determine function name for structural check"
+
+
 def _structural_check(original: str, proposal: str, target_fn: str | None = None) -> tuple[bool, str]:
     """Structural fallback when execution testing cannot run (e.g. 2D array params).
 
@@ -124,10 +130,10 @@ def _structural_check(original: str, proposal: str, target_fn: str | None = None
         # before the first '(').
         name_match = re.search(r"\b([A-Za-z_]\w*)\s*\(", original)
         if not name_match:
-            return False, "could not determine function name for structural check"
+            return False, _STRUCTURAL_UNAVAILABLE
         fn_name = name_match.group(1)
         if fn_name in {"if", "for", "while", "switch", "return", "main"}:
-            return False, "could not determine function name for structural check"
+            return False, _STRUCTURAL_UNAVAILABLE
 
     # Count self-calls: occurrences of `fn_name(` that are not the definition line.
     def _count_calls(code: str) -> int:
@@ -358,7 +364,13 @@ def optimize_checked(
         return OptimizationResult(
             code=code,
             changed=False,
-            verified=True,
+            # Not verified: nothing was compiled and nothing was run. `verified`
+            # means "the rewrite was proven equivalent by executing both", as
+            # OptimizeResponse's own docstring says, and `equivalence.check`
+            # agrees - it returns verified=False for "no rewrite was offered".
+            # Claiming true here made the playground badge read "Verified
+            # equivalent" about a decision taken statically in microseconds.
+            verified=False,
             speedup=1.0,
             note="No recursive function detected. The code already uses iteration or sequential logic.",
         )
@@ -459,7 +471,19 @@ def optimize_checked(
         struct_ok, struct_note = _structural_check(code, full_proposal)
         combined_note = f"{verdict.summary()} | structural: {struct_note}"
         LOGGER.warning("optimizer: execution unverifiable — %s", combined_note)
-        if allow_unverified or struct_ok:
+        # `allow_unverified` means "the driver could not supply arguments, but
+        # something still looked at this" - not "show anything". When execution
+        # testing *and* the structural check both failed to run, nothing has
+        # examined the proposal, and this endpoint's contract is that a caller
+        # asking for a faster version is never handed code that computes
+        # something else.
+        #
+        # Measured on a `main`-only program with no recursion: both checks were
+        # unavailable, and the model's proposal - a memoisation table for a loop
+        # with no repeated subproblems, with the unreachable line left in place -
+        # was returned as the answer.
+        examined = struct_ok or struct_note != _STRUCTURAL_UNAVAILABLE
+        if struct_ok or (allow_unverified and examined):
             return OptimizationResult(
                 code=full_proposal,
                 changed=True,
@@ -468,7 +492,10 @@ def optimize_checked(
                 isolated_proposal=isolated_candidate,
                 target_fn_name=target_fn_id,
             )
-        return OptimizationResult(code=code, note=combined_note)
+        return OptimizationResult(
+            code=code,
+            note=f"No change: nothing could check the proposal ({combined_note})",
+        )
 
     # If the model proposal was rejected by execution equivalence, try our deterministic transform fallbacks
     for transform_fn in (_transform_linear_step_recursion, _transform_accumulator_recursion):

@@ -617,6 +617,48 @@ def _cases(signature: Signature) -> tuple[list[tuple[Value, ...]], tuple[Value, 
     )
 
 
+def _without_main(code: str) -> str:
+    """Drop a top-level ``main`` definition so the generated driver can have one.
+
+    Students paste whole programs, not lone functions. The driver appends its
+    own ``main`` to call the function under test, so a submission that already
+    has one produced two definitions in a single translation unit and the
+    verdict came back "original compile failed" — blaming the user's code for a
+    collision the harness created. Measured on a recursive `isEven` inside a
+    complete program: verification never ran, the unverified rewrite was shown,
+    and it was wrong for every even number.
+
+    Removing ``main`` is safe for this purpose: the question is whether the two
+    versions of *the function* agree, and the driver supplies the inputs that
+    decide it. Anything ``main`` did is not part of that comparison.
+
+    Falls back to the original text when the parse fails, because a slightly
+    noisy compile error is better than silently checking different code.
+    """
+    root = cpp_parser.parse(code)
+    if root is None:
+        return code
+    spans: list[tuple[int, int]] = []
+    for function in cpp_parser.iter_descendants(root, {"function_definition"}):
+        declarator = function.child_by_field_name("declarator")
+        while declarator is not None and declarator.type in (
+            "pointer_declarator",
+            "reference_declarator",
+        ):
+            declarator = declarator.child_by_field_name("declarator")
+        if declarator is None or declarator.type != "function_declarator":
+            continue
+        name_node = declarator.child_by_field_name("declarator")
+        if name_node is not None and cpp_parser.node_text(name_node) == "main":
+            spans.append((function.start_byte, function.end_byte))
+    if not spans:
+        return code
+    data = code.encode("utf-8")
+    for start, end in sorted(spans, reverse=True):
+        data = data[:start] + data[end:]
+    return data.decode("utf-8")
+
+
 def check(original: str, optimized: str, *, timeout: float = 20.0) -> EquivalenceResult:
     """Decide whether ``optimized`` may be shown to the user.
 
@@ -630,6 +672,10 @@ def check(original: str, optimized: str, *, timeout: float = 20.0) -> Equivalenc
     compiler = find_cxx_compiler()
     if compiler is None:
         return EquivalenceResult(reason="no C++ compiler on this host")
+
+    # The driver brings its own main, so the submission's must go first.
+    original = _without_main(original)
+    optimized = _without_main(optimized)
 
     signature = parse_signature(original)
     if signature is None:

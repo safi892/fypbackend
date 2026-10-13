@@ -85,6 +85,16 @@ int add(int a, int b) {
               </div>
             </div>
             <p id="optimization-note" class="muted" style="margin: 0 0 10px; font-size: 13px;" hidden></p>
+            <div id="change-list-wrap" hidden style="margin: 0 0 12px;">
+              <h4 style="margin: 0 0 6px; font-size: 13px;">What changed, and why</h4>
+              <ul id="change-list" style="margin: 0; padding-left: 18px; font-size: 13px;"></ul>
+              <p id="change-summary" class="muted" style="margin: 6px 0 0; font-size: 12px;"></p>
+            </div>
+            <div id="defect-findings" hidden style="margin: 0 0 12px;">
+              <h4 style="margin: 0 0 6px; font-size: 13px;">What the checks found</h4>
+              <ul id="defect-list" style="margin: 0; padding-left: 18px; font-size: 13px;"></ul>
+              <p id="defect-tiers" class="muted" style="margin: 6px 0 0; font-size: 12px;"></p>
+            </div>
             <pre class="output-code" tabindex="0" aria-label="Commented C++ code"><code id="commented-code"></code></pre>
             <div id="optimized-code-container" hidden>
               <pre class="output-code" tabindex="0" aria-label="Optimized C++ code" style="display:none;"><code id="optimized-code"></code></pre>

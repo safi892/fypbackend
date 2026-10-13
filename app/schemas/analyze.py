@@ -59,6 +59,52 @@ class CodeValidationResponse(BaseModel):
     )
 
 
+class DefectsRequest(BaseModel):
+    """Ask what can be established about the code without the model."""
+
+    code: str = Field(..., min_length=1, max_length=100_000,
+                      description="Source code to check")
+    run_code: bool = Field(
+        False,
+        description="Also compile and run the code to look for non-termination. "
+        "Off by default: it executes what you send, with a timeout as the only "
+        "restraint and no sandbox.",
+    )
+
+
+class DefectFinding(BaseModel):
+    """One finding, with the line it quotes and how sure the checker is."""
+
+    rule: str = Field(..., description="Stable id, e.g. unused_variable, infinite_loop")
+    line: int = Field(..., description="1-based line in the submitted code")
+    code: str = Field(..., description="That line, copied verbatim from the input")
+    message: str
+    certain: bool = Field(
+        ...,
+        description="True when the rule only fires on cases it can prove. False "
+        "means evidence rather than proof - render the two differently.",
+    )
+    tier: int = Field(..., description="1 compiler, 2 cppcheck, 3 parse tree, 4 timeout")
+
+
+class DefectsResponse(BaseModel):
+    """What the compiler, cppcheck and the parse tree found on their own.
+
+    ``compile_error`` short-circuits everything else: when the code does not
+    compile, that is the user's problem, and the other tiers would describe
+    structure that is not in the program.
+
+    ``tiers_run`` exists so a client never implies all four ran. Tier 2 needs
+    cppcheck installed and tier 1 reads GNU diagnostics, so a host can
+    legitimately offer fewer.
+    """
+
+    input_code: str
+    compile_error: str | None = None
+    findings: list[DefectFinding] = Field(default_factory=list)
+    tiers_run: dict[int, bool] = Field(default_factory=dict)
+
+
 class AnalyzeRequest(BaseModel):
     """Incoming analysis request. New fields default so old clients work."""
 
@@ -218,6 +264,24 @@ class OptimizeRequest(BaseModel):
     mode: str = Field("auto", description="Optimization mode: auto | loop | dp")
 
 
+class ChangeExplanation(BaseModel):
+    """One line the rewrite changed, and why, when a check established it."""
+
+    kind: str = Field(..., description="removed | added")
+    line: int = Field(
+        ...,
+        description="1-based: the original for a removal, the rewrite for an addition",
+    )
+    code: str = Field(..., description="That line verbatim, so the claim can be checked")
+    reason: str | None = Field(
+        None,
+        description="Why, from the compiler/cppcheck/parse-tree checks. Null when "
+        "nothing established a reason - the line still changed, but no claim is "
+        "made about the motive.",
+    )
+    rule: str | None = Field(None, description="The check that supplied the reason")
+
+
 class OptimizeResponse(BaseModel):
     """The rewrite, and the evidence for it.
 
@@ -240,3 +304,12 @@ class OptimizeResponse(BaseModel):
     )
     note: str = Field("", description="Human-readable summary of what was checked")
     explanation: str = Field("", description="Plain-language explanation of what the code does")
+    changes: list[ChangeExplanation] = Field(
+        default_factory=list,
+        description="What the rewrite changed, line by line. Reasons come from the "
+        "deterministic checks, never from the model: it has a plausible reason for "
+        "everything and 30% of its descriptions carry a false claim.",
+    )
+    changes_summary: str = Field(
+        "", description="One sentence over the list, or empty when nothing changed"
+    )

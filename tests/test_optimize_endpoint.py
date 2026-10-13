@@ -142,3 +142,39 @@ def test_ready_names_the_next_step_when_something_is_missing(client: TestClient,
 
     assert body["ready"] is False
     assert body["next_step"], "an unready service should say what to do about it"
+
+
+def test_an_unexaminable_proposal_is_not_served_even_to_the_web_client():
+    """`allow_unverified` must not mean "show anything".
+
+    Measured on a `main`-only program with no recursion: execution testing had
+    no function signature to drive and the structural check could not determine
+    a function name, so nothing examined the proposal at all — and the model's
+    answer was returned as the result. That answer invented a memoisation table
+    for a loop with no repeated subproblems, left the unreachable statement in
+    place, and came with an explanation asserting the loop condition is never
+    true, which is false.
+
+    The endpoint's contract is that a caller asking for a faster version is
+    never handed code that computes something else. "Nothing checked it" has to
+    fall on the refusing side of that line.
+    """
+    from app.services.optimization_service import optimize_checked
+
+    code = (
+        "#include <iostream>\n"
+        "using namespace std;\n"
+        "\n"
+        "int main() {\n"
+        "    for (int i = 0; i < 5; i++) {\n"
+        "        cout << i << endl;\n"
+        "        break;\n"
+        '        cout << "Unreachable" << endl;\n'
+        "    }\n"
+        "    return 0;\n"
+        "}"
+    )
+    result = optimize_checked(code, mode="auto", allow_unverified=True)
+    assert result.changed is False
+    assert result.code.strip() == code.strip()
+    assert "nothing could check" in result.note

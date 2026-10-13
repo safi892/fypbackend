@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Depends, Header
 
+from app.core.security import bearer_scheme
 from app.schemas.auth import (
     AuthResponse,
     LoginRequest,
@@ -22,11 +23,19 @@ def login(payload: LoginRequest) -> AuthResponse:
     return login_user(payload)
 
 
-@router.get("/me", response_model=SessionUserResponse)
+@router.get(
+    "/me",
+    response_model=SessionUserResponse,
+    dependencies=[Depends(bearer_scheme)],
+)
 def me(authorization: str | None = Header(default=None)) -> SessionUserResponse:
     return current_user(authorization)
 
 
-@router.post("/logout", response_model=TokenResponse)
+@router.post(
+    "/logout",
+    response_model=TokenResponse,
+    dependencies=[Depends(bearer_scheme)],
+)
 def logout(authorization: str | None = Header(default=None)) -> TokenResponse:
     return logout_user(authorization)
