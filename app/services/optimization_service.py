@@ -334,6 +334,72 @@ def _transform_linear_step_recursion(code: str) -> str | None:
     return "\n".join(lines)
 
 
+def _splice_function(
+    code: str,
+    fn_name: str,
+    new_fn: str,
+    analysis: StaticAnalysis | None = None,
+) -> str:
+    """Replace a single function's definition inside code, preserving all sibling functions."""
+    if analysis and analysis.functions:
+        target = next((f for f in analysis.functions if f.name == fn_name), None)
+        if target:
+            lines = code.splitlines()
+            return "\n".join(
+                lines[: target.start_line - 1]
+                + new_fn.splitlines()
+                + lines[target.end_line :]
+            )
+    pattern = (
+        rf"(?m)^[A-Za-z_]\w*[\s\*&]+\b{re.escape(fn_name)}"
+        rf"\s*\([^)]*\)\s*\{{[\s\S]*?\n\}}"
+    )
+    spliced, n = re.subn(pattern, new_fn, code)
+    if n > 0:
+        return spliced
+    return new_fn
+
+
+def _apply_transforms_to_code(
+    code: str, analysis: StaticAnalysis | None = None
+) -> tuple[str, bool]:
+    """Apply deterministic recursion-to-loop transforms to all eligible functions in code.
+
+    Preserves all functions in the file, whether transformed or not.
+    Returns (updated_code, any_changed).
+    """
+    if analysis is None:
+        analysis = analyze_code(code)
+
+    if not analysis or not analysis.functions:
+        for tx in (_transform_linear_step_recursion, _transform_accumulator_recursion):
+            c = tx(code)
+            if c and c.strip() != code.strip():
+                return c, True
+        return code, False
+
+    updated_code = code
+    any_changed = False
+    lines = code.splitlines()
+
+    fns = sorted(analysis.functions, key=lambda f: f.start_line, reverse=True)
+    for fn in fns:
+        if not fn.recursive:
+            continue
+        fn_code = "\n".join(lines[fn.start_line - 1 : fn.end_line])
+        for tx in (_transform_linear_step_recursion, _transform_accumulator_recursion):
+            candidate = tx(fn_code)
+            if candidate and candidate.strip() != fn_code.strip():
+                fresh_analysis = analyze_code(updated_code)
+                updated_code = _splice_function(
+                    updated_code, fn.name, candidate, fresh_analysis
+                )
+                any_changed = True
+                break
+
+    return updated_code, any_changed
+
+
 def optimize_checked(
     code: str,
     mode: str = "auto",
@@ -409,13 +475,20 @@ def optimize_checked(
         proposal = _extract_code(raw)
 
     if not proposal or proposal.strip() == target_code.strip():
-        proposal = (
-            _transform_linear_step_recursion(target_code)
-            or _transform_accumulator_recursion(target_code)
-            or ""
-        )
-        if not proposal:
-            return OptimizationResult(code=code, note="no rewrite was offered")
+        if single_rec_target:
+            proposal = (
+                _transform_linear_step_recursion(target_code)
+                or _transform_accumulator_recursion(target_code)
+                or ""
+            )
+            if not proposal:
+                return OptimizationResult(code=code, note="no rewrite was offered")
+        else:
+            alt_full, any_changed = _apply_transforms_to_code(code, analysis)
+            if any_changed:
+                proposal = alt_full
+            else:
+                return OptimizationResult(code=code, note="no rewrite was offered")
 
     # If the proposal still left recursive self-calls, attempt transform fallbacks
     fn_name = single_rec_target.name if single_rec_target else None
@@ -432,14 +505,19 @@ def optimize_checked(
             and not re.search(rf"^\s*\w[\w\s\*&<>,]*\b{re.escape(fn_name)}\s*\(", l)
         ]
         if len(call_lines) > 0:
-            fallback = (
-                _transform_linear_step_recursion(target_code)
-                or _transform_accumulator_recursion(target_code)
-            )
-            if fallback:
-                proposal = fallback
+            if single_rec_target:
+                fallback = (
+                    _transform_linear_step_recursion(target_code)
+                    or _transform_accumulator_recursion(target_code)
+                )
+                if fallback:
+                    proposal = fallback
+            else:
+                alt_full, any_changed = _apply_transforms_to_code(code, analysis)
+                if any_changed:
+                    proposal = alt_full
 
-    isolated_candidate = proposal if not single_rec_target else ""
+    isolated_candidate = proposal if single_rec_target else ""
     target_fn_id = single_rec_target.name if single_rec_target else ""
     if single_rec_target:
         isolated_candidate = proposal
@@ -498,17 +576,29 @@ def optimize_checked(
         )
 
     # If the model proposal was rejected by execution equivalence, try our deterministic transform fallbacks
-    for transform_fn in (_transform_linear_step_recursion, _transform_accumulator_recursion):
-        alt_candidate = transform_fn(target_code)
-        if alt_candidate and alt_candidate.strip() != target_code.strip():
-            if single_rec_target:
+    if single_rec_target:
+        for transform_fn in (_transform_linear_step_recursion, _transform_accumulator_recursion):
+            alt_candidate = transform_fn(target_code)
+            if alt_candidate and alt_candidate.strip() != target_code.strip():
                 alt_full = "\n".join(
                     lines[: single_rec_target.start_line - 1]
                     + alt_candidate.splitlines()
                     + lines[single_rec_target.end_line :]
                 )
-            else:
-                alt_full = alt_candidate
+                alt_verdict = equivalence.check(code, alt_full)
+                if alt_verdict.equivalent:
+                    return OptimizationResult(
+                        code=alt_full,
+                        changed=True,
+                        verified=True,
+                        speedup=alt_verdict.speedup,
+                        note=alt_verdict.summary(),
+                        isolated_proposal=alt_candidate,
+                        target_fn_name=target_fn_id,
+                    )
+    else:
+        alt_full, any_changed = _apply_transforms_to_code(code, analysis)
+        if any_changed and alt_full.strip() != code.strip():
             alt_verdict = equivalence.check(code, alt_full)
             if alt_verdict.equivalent:
                 return OptimizationResult(
@@ -517,8 +607,6 @@ def optimize_checked(
                     verified=True,
                     speedup=alt_verdict.speedup,
                     note=alt_verdict.summary(),
-                    isolated_proposal=alt_candidate,
-                    target_fn_name=target_fn_id,
                 )
 
     LOGGER.warning("optimizer: rewrite rejected (%s)", verdict.summary())

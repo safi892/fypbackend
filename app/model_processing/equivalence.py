@@ -659,6 +659,33 @@ def _without_main(code: str) -> str:
     return data.decode("utf-8")
 
 
+def _defined_function_names(code: str) -> set[str]:
+    """Return names of non-main function definitions found in code."""
+    root = cpp_parser.parse(code)
+    if root is not None:
+        names: set[str] = set()
+        for function in cpp_parser.iter_descendants(root, {"function_definition"}):
+            declarator = function.child_by_field_name("declarator")
+            while declarator is not None and declarator.type in (
+                "pointer_declarator",
+                "reference_declarator",
+            ):
+                declarator = declarator.child_by_field_name("declarator")
+            if declarator is None or declarator.type != "function_declarator":
+                continue
+            name_node = declarator.child_by_field_name("declarator")
+            name = cpp_parser.node_text(name_node) if name_node is not None else ""
+            if name and name not in {"main", "if", "for", "while", "switch", "return", "sizeof"}:
+                names.add(name)
+        return names
+
+    return {
+        m.group("name")
+        for m in SIGNATURE_RE.finditer(code)
+        if m.group("name") not in {"main", "if", "for", "while", "switch", "return", "sizeof"}
+    }
+
+
 def check(original: str, optimized: str, *, timeout: float = 20.0) -> EquivalenceResult:
     """Decide whether ``optimized`` may be shown to the user.
 
@@ -676,6 +703,15 @@ def check(original: str, optimized: str, *, timeout: float = 20.0) -> Equivalenc
     # The driver brings its own main, so the submission's must go first.
     original = _without_main(original)
     optimized = _without_main(optimized)
+
+    # An optimization must never silently discard functions defined in the original code.
+    orig_fns = _defined_function_names(original)
+    opt_fns = _defined_function_names(optimized)
+    missing = orig_fns - opt_fns
+    if missing:
+        return EquivalenceResult(
+            reason=f"proposal omitted function(s) from original code: {', '.join(sorted(missing))}"
+        )
 
     signature = parse_signature(original)
     if signature is None:

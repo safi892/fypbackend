@@ -261,3 +261,64 @@ def test_service_handles_multi_function_file(monkeypatch):
 
     assert result.changed and result.verified
     assert result.code == MULTI_FUNCTION_OPTIMIZED
+
+
+# ===========================================================================
+# 4.  Multi-function input with multiple recursive functions (f, g, h)
+# ===========================================================================
+
+FGH_CODE = """\
+int f(int n) {
+    if (n <= 1)
+        return n;
+    return n + f(n - 2);
+}
+
+int g(int n) {
+    if (n <= 0)
+        return 1;
+    return n * g(n - 1);
+}
+
+int h(int n) {
+    if (n <= 0)
+        return 0;
+
+    int x = f(n);
+    int y = g(n % 5);
+
+    return x + y + h(n - 1);
+}"""
+
+
+@needs_compiler
+def test_multi_recursive_file_preserves_all_functions():
+    """When a file has multiple recursive functions, optimize_checked transforms
+    eligible functions and preserves all sibling functions."""
+    result = optimization_service.optimize_checked(FGH_CODE, mode="loop")
+
+    assert result.changed is True
+    assert result.verified is True
+    assert "int f(int n)" in result.code
+    assert "int g(int n)" in result.code
+    assert "int h(int n)" in result.code
+    assert "while (n > 1)" in result.code  # f converted to loop
+    assert "while (n > 0)" in result.code  # g converted to loop
+
+
+def test_equivalence_check_rejects_omitted_functions():
+    """An optimization proposal that drops sibling functions must be rejected."""
+    only_f = """\
+int f(int n) {
+    int total = 0;
+    while (n > 1) {
+        total += n;
+        n -= 2;
+    }
+    return total + n;
+}"""
+    verdict = check(FGH_CODE, only_f)
+    assert not verdict.equivalent
+    assert "omitted function" in verdict.reason
+    assert "g" in verdict.reason and "h" in verdict.reason
+
