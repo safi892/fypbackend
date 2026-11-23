@@ -220,6 +220,43 @@ class ChangeAnalysis(BaseModel):
     complexity_increased: bool = False
 
 
+class FunctionAnalysisItem(BaseModel):
+    """Isolated analysis result for one C++ function in the submission."""
+
+    name: str = Field(..., description="Function name as declared in C++")
+    start_line: int = Field(..., ge=1, description="1-based starting line of function definition")
+    end_line: int = Field(..., ge=1, description="1-based ending line of function definition")
+    code: str = Field(..., description="Exact original source code of this function")
+    commented_code: str = Field(
+        ..., description="Source code of this function with inline/doc comments"
+    )
+    documentation: DocEntry | None = Field(
+        None, description="Doc entry with parameters, return type, description"
+    )
+    explanation: str = Field(..., description="Explanation of what this specific function does")
+
+
+class FunctionOptimizationItem(BaseModel):
+    """Isolated optimization result for one C++ function in the submission."""
+
+    name: str = Field(..., description="Function name as declared in C++")
+    start_line: int = Field(..., ge=1, description="1-based starting line in original code")
+    end_line: int = Field(..., ge=1, description="1-based ending line in original code")
+    original_code: str = Field(..., description="Original code of this function")
+    optimized_code: str = Field(
+        ..., description="Optimized code of this function (or original if unchanged)"
+    )
+    changed: bool = Field(False, description="True if this specific function was rewritten")
+    verified: bool = Field(True, description="True if optimization was verified (or unchanged)")
+    speedup: float = Field(1.0, description="Speedup multiplier for this function")
+    note: str | None = Field(
+        None, description="Note on how this function was optimized or why unchanged"
+    )
+    diff: list[DiffRow] = Field(
+        default_factory=list, description="Unified line diff for this function"
+    )
+
+
 class AnalyzeResponse(BaseModel):
     """Combined analysis result; ``/analyze`` exposes only the display fields."""
 
@@ -227,6 +264,10 @@ class AnalyzeResponse(BaseModel):
     input_code: str
     commented_code: str
     explanation: str
+    functions: list[FunctionAnalysisItem] = Field(
+        default_factory=list,
+        description="Per-function breakdown with isolated code, comments, docs, and explanation",
+    )
 
     # --- Internal fields (computed, but filtered from public /analyze) ---
     analysis: StaticAnalysis | None = None
@@ -333,4 +374,9 @@ class OptimizeResponse(BaseModel):
         description="Before/after rows with a little context, for colouring. "
         "Comment-only differences count as context: the model comments nearly "
         "every line, and marking those as changes hides the real edit.",
+    )
+    functions: list[FunctionOptimizationItem] = Field(
+        default_factory=list,
+        description="Per-function breakdown with isolated original/optimized code, "
+        "speedup, verification, and diff.",
     )

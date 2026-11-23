@@ -113,3 +113,73 @@ UI rendering logic:
 - If `optimizationVerified == true`, render the "Verified" badge.
 - If `speedup != null && speedup > 1.0`, render `"⚡ ${speedup}x"`.
 
+## Function-by-Function Breakdown
+
+Both `POST /analyze` and `POST /optimize` now return a `functions: List<...>` array.
+This allows the Android app to render horizontal chips (`[ All ] [ calculateTotal ] [ calculateAverage ] ...`) and show isolated documentation, code, and diffs when the user taps a specific function.
+
+### Analyze Function Model
+
+```kotlin
+data class DocEntry(
+    val function: String,
+    val description: String,
+    val parameters: List<String>,
+    val returns: String
+)
+
+data class FunctionAnalysisItem(
+    val name: String,
+    @SerializedName("start_line") val startLine: Int,
+    @SerializedName("end_line") val endLine: Int,
+    val code: String,
+    @SerializedName("commented_code") val commentedCode: String,
+    val documentation: DocEntry?,
+    val explanation: String
+)
+
+data class AnalyzeResponse(
+    @SerializedName("input_code") val inputCode: String,
+    @SerializedName("commented_code") val commentedCode: String,
+    val explanation: String,
+    @SerializedName("needs_review") val needsReview: Boolean,
+    val functions: List<FunctionAnalysisItem> = emptyList()
+)
+```
+
+### Optimize Function Model
+
+```kotlin
+data class DiffRow(
+    val kind: String, // "context" | "added" | "removed"
+    @SerializedName("old_line") val oldLine: Int?,
+    @SerializedName("new_line") val newLine: Int?,
+    val text: String
+)
+
+data class FunctionOptimizationItem(
+    val name: String,
+    @SerializedName("start_line") val startLine: Int,
+    @SerializedName("end_line") val endLine: Int,
+    @SerializedName("original_code") val originalCode: String,
+    @SerializedName("optimized_code") val optimizedCode: String,
+    val changed: Boolean,
+    val verified: Boolean,
+    val speedup: Double,
+    val note: String?,
+    val diff: List<DiffRow> = emptyList()
+)
+
+data class OptimizeResponse(
+    @SerializedName("input_code") val inputCode: String,
+    val code: String,
+    val changed: Boolean,
+    val verified: Boolean,
+    val speedup: Double,
+    val note: String?,
+    val explanation: String,
+    val functions: List<FunctionOptimizationItem> = emptyList()
+)
+```
+
+

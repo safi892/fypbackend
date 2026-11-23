@@ -169,7 +169,23 @@ Runs deterministic static analysis, Tree-Sitter parsing, and model inference to 
   "commented_code": "#include <iostream>\nusing namespace std;\n\n/**\n * Function: f\n * Summary: Finds the maximum element.\n * Inputs: int a[], int n\n * Process: Iterates through elements in a loop, applying conditional updates.\n * Returns: int\n */\nint f(int a[], int n) {\n    int x = a[0];  // start with the first element as the best candidate\n    for (int i = 1; i < n; i++)  // scan the rest of the array\n        if (a[i] > x)  // compare current element with the best so far\n            x = a[i];  // update best when a[i] is larger\n    return x;\n}\n\n/**\n * Function: g\n * Summary: Finds the minimum element.\n * Inputs: int a[], int n\n * Process: Iterates through elements in a loop, applying conditional updates.\n * Returns: int\n */\nint g(int a[], int n) {\n    int x = a[0];  // start with the first element as the best candidate\n    for (int i = 1; i < n; i++)  // scan the rest of the array\n        if (a[i] < x)  // compare current element with the best so far\n            x = a[i];  // update best when a[i] is smaller\n    return x;  // return the maximum value found\n}\n\n/**\n * Function: h\n * Summary: Recursively sums the last element with the sum of the rest of the array.\n * Inputs: int a[], int n\n * Process: Checks the base case and recursively processes the remaining elements.\n * Returns: int\n */\nint h(int a[], int n) {\n    if (n == 0)  // Base case: empty array yields 0\n        return 0;\n    return a[n - 1] + h(a, n - 1);  // Recursive step: add current element to the sum of the rest of the array\n}\n\n/**\n * Function: k\n * Summary: Combines these three results.\n * Inputs: int a[], int n\n * Process: Calls f, g, h to compute intermediate values and combines their results.\n * Returns: int\n */\nint k(int a[], int n) {\n    int x = f(a, n);  // Compute f(a, n) – this is the first operation in k\n    int y = g(a, n);  // Compute g(a, n) – second operation in k\n    int z = h(a, n);  // Compute h(a, n) – third operation in k\n    return x - y + z;  // Combine results with a simple arithmetic expression\n}",
   "explanation": "Purpose: Computes an expression over an integer array.\nInput: `int a[]` – array to process; `int n` – length.\nOutput: `int` – combined result.\nAlgorithm: `f` finds maximum, `g` finds minimum, `h` recursively sums array, `k` computes f - g + h.",
   "needs_review": false,
-  "review_reasons": []
+  "review_reasons": [],
+  "functions": [
+    {
+      "name": "f",
+      "start_line": 4,
+      "end_line": 10,
+      "code": "int f(int a[], int n) {\n    int x = a[0];\n    for (int i = 1; i < n; i++)\n        if (a[i] > x)\n            x = a[i];\n    return x;\n}",
+      "commented_code": "/**\n * Function: f\n * Summary: Finds the maximum element.\n */\nint f(int a[], int n) {\n    int x = a[0];  // start with first\n    for (int i = 1; i < n; i++)\n        if (a[i] > x)\n            x = a[i];\n    return x;\n}",
+      "documentation": {
+        "function": "f",
+        "description": "Function 'f' contains loops (depth 1)",
+        "parameters": ["a", "n"],
+        "returns": "int"
+      },
+      "explanation": "Finds the maximum element in the array."
+    }
+  ]
 }
 ```
 
@@ -219,7 +235,28 @@ Transforms recursive or suboptimal C++ code into verified iterative implementati
   "changed": true,
   "verified": true,
   "speedup": 1.45,
-  "note": "Recursion converted to loop; verified equivalent on 8 test inputs (1.5x faster)"
+  "note": "Recursion converted to loop; verified equivalent on 8 test inputs (1.5x faster)",
+  "functions": [
+    {
+      "name": "sum",
+      "start_line": 1,
+      "end_line": 4,
+      "original_code": "int sum(int n) {\n    if (n <= 0) return 0;\n    return n + sum(n - 1);\n}",
+      "optimized_code": "int sum(int n) {\n    if (n <= 0)\n        return 0;\n    int acc = 0;\n    while (n > 0) {\n        acc += n;\n        n--;\n    }\n    return acc;\n}",
+      "changed": true,
+      "verified": true,
+      "speedup": 1.45,
+      "note": "Recursion converted to loop; verified equivalent on 8 test inputs (1.5x faster)",
+      "diff": [
+        {
+          "kind": "context",
+          "old_line": 1,
+          "new_line": 1,
+          "text": "int sum(int n) {"
+        }
+      ]
+    }
+  ]
 }
 ```
 

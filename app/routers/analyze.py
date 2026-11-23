@@ -52,6 +52,10 @@ from app.services import (
 )
 from app.services.analyzer import analyze_code as static_analyze
 from app.services.auth_service import require_user
+from app.services.function_extractor import (
+    extract_analysis_functions,
+    extract_optimization_functions,
+)
 from app.services.history_service import (
     get_history_entry,
     list_history,
@@ -214,6 +218,7 @@ def _translated_line_comments(items: list[dict[str, object]]) -> list[dict[str, 
         "explanation",
         "needs_review",
         "review_reasons",
+        "functions",
     },
 )
 def analyze(
@@ -306,10 +311,19 @@ def analyze(
                 [_anchor_from_item(item) for item in line_comment_items],
             )
 
+    fn_analyses = extract_analysis_functions(
+        code=payload.code,
+        commented_code=commented_code,
+        analysis=analysis,
+        docs=documentation,
+        global_explanation=explanation,
+    )
+
     response = AnalyzeResponse(
         input_code=payload.code.strip(),
         commented_code=commented_code,
         explanation=explanation,
+        functions=fn_analyses,
         analysis=analysis,
         suggestions=suggestions,
         documentation=documentation,
@@ -511,6 +525,13 @@ def optimize(
         except Exception:  # noqa: BLE001 - explaining a rewrite must never fail one
             changes, changes_summary, diff = [], "", []
 
+    fn_optimizations = extract_optimization_functions(
+        code=payload.code,
+        optimized_code=optimized_code,
+        result=result,
+        changes=changes,
+    )
+
     response = OptimizeResponse(
         input_code=payload.code.strip(),
         code=optimized_code,
@@ -523,6 +544,7 @@ def optimize(
         changes_summary=changes_summary,
         commented_code=commented_code or optimized_code,
         diff=diff,
+        functions=fn_optimizations,
     )
 
     if user is not None:
