@@ -241,7 +241,7 @@ def test_backend_is_one_of_the_known_engines():
     """
     from app.core import config
 
-    assert config.MODEL_BACKEND in {"codet5", "qwen_gguf"}
+    assert config.MODEL_BACKEND in {"codet5", "qwen_gguf", "cpp_reviewer_gguf", "llm_gguf"}
 
 
 # --- prompt shape --------------------------------------------------------------- #

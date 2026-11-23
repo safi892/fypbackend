@@ -380,11 +380,13 @@ def optimize(
             from app.core.config import MODEL_BACKEND
 
             from app.model_processing.anchors import render_commented_code
-            from app.services import qwen_service
+            from app.services import cpp_review_service as review_service
+
+            is_gguf_backend = MODEL_BACKEND in ("cpp_reviewer_gguf", "qwen_gguf", "llm_gguf")
 
             if (
                 result.changed
-                and MODEL_BACKEND == "qwen_gguf"
+                and is_gguf_backend
                 and result.isolated_proposal
                 and result.target_fn_name
             ):
@@ -393,10 +395,10 @@ def optimize(
                 # Comment the original, comment the rewritten function on its
                 # own, then splice the second into the first so the rest of the
                 # file keeps the comments it already earned.
-                orig_anchors, _, _ = qwen_service.annotate(payload.code)
+                orig_anchors, _, _ = review_service.annotate(payload.code)
                 full_commented = render_commented_code(payload.code, orig_anchors)
 
-                isolated_anchors, _, _ = qwen_service.annotate(result.isolated_proposal)
+                isolated_anchors, _, _ = review_service.annotate(result.isolated_proposal)
                 commented_isolated = render_commented_code(
                     result.isolated_proposal, isolated_anchors
                 )
@@ -409,12 +411,12 @@ def optimize(
                 spliced = re.sub(fn_pattern, commented_isolated, full_commented)
                 if spliced and fn_name in spliced:
                     optimized_code = spliced
-            elif not result.changed and MODEL_BACKEND == "qwen_gguf":
+            elif not result.changed and is_gguf_backend:
                 # Nothing was rewritten, so annotate what the user sent - into
                 # `commented_code`, never into `code`. Two tests pin the promise
                 # that a rejected rewrite hands back the caller's own source
                 # byte-for-byte, and annotating it in place broke both.
-                anchors, _, _ = qwen_service.annotate(result.code)
+                anchors, _, _ = review_service.annotate(result.code)
                 commented_code = render_commented_code(result.code, anchors)
 
             if result.changed and not has_meaningful_comments(optimized_code):
@@ -433,9 +435,9 @@ def optimize(
     explanation_text = ""
     try:
         from app.core.config import MODEL_BACKEND
-        if MODEL_BACKEND == "qwen_gguf":
-            from app.services import qwen_service
-            raw_expl = qwen_service.explain(optimized_code)
+        if MODEL_BACKEND in ("cpp_reviewer_gguf", "qwen_gguf", "llm_gguf"):
+            from app.services import cpp_review_service as review_service
+            raw_expl = review_service.explain(optimized_code)
             explanation_text = explanation_service.generate(optimized_code, raw_expl)
         else:
             explanation_text = explanation_service.generate(optimized_code)

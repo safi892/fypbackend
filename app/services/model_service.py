@@ -417,13 +417,13 @@ def run_model(code: str, analysis: StaticAnalysis | None = None) -> RawModelOutp
     :param analysis: static facts, passed through to the engine that wants them.
     :return: a ``RawModelOutput`` (either section may be empty).
     """
-    if MODEL_BACKEND == "qwen_gguf":
-        from app.services import qwen_service
+    if MODEL_BACKEND in ("cpp_reviewer_gguf", "qwen_gguf", "llm_gguf"):
+        from app.services import cpp_review_service
 
         try:
-            result = qwen_service.run(code)
-        except qwen_service.LlamaServerUnavailable as exc:
-            LOGGER.error("qwen backend unavailable, trying codet5: %s", exc)
+            result = cpp_review_service.run(code)
+        except cpp_review_service.LlamaServerUnavailable as exc:
+            LOGGER.error("cpp review backend unavailable, trying codet5: %s", exc)
             try:
                 return _run_codet5(code, analysis)
             except (FileNotFoundError, RuntimeError) as fallback_error:

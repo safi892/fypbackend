@@ -45,10 +45,10 @@ Tests need no model — the HTTP call is stubbed everywhere except `test_analyze
 
 **One switch, two engines.** `MODEL_BACKEND` in `.env` picks which engine answers `model_service.run_model()`:
 
-- `qwen_gguf` — current. `qwen_service` → llama-server → line-anchored comments.
-- `codet5` — legacy, in-process seq2seq, **the code default** so existing deployments keep their behaviour. The checkpoint is no longer on this machine.
+- `cpp_reviewer_gguf` (legacy alias `qwen_gguf`) — current. `cpp_review_service` → llama-server → line-anchored comments.
+- `codet5` — legacy, in-process seq2seq. The checkpoint is no longer on this machine.
 
-When llama-server is down the Qwen path falls back to CodeT5 rather than erroring, so a mobile client gets a degraded answer. If the fallback also fails, the *llama-server* error is what surfaces — "checkpoint not found" would name something the operator never chose.
+When llama-server is down the review path falls back to CodeT5 rather than erroring, so a mobile client gets a degraded answer. If the fallback also fails, the *llama-server* error is what surfaces — "checkpoint not found" would name something the operator never chose.
 
 **Roman Urdu is backend-local now.** `translation_service.to_roman_urdu` first
 loads `models/roman-model/t5-stage2-c` (override with `ROMAN_URDU_MODEL_PATH`),

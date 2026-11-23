@@ -77,7 +77,7 @@ def ready() -> dict:
     """
     checks: dict[str, dict] = {}
 
-    if MODEL_BACKEND == "qwen_gguf":
+    if MODEL_BACKEND in ("cpp_reviewer_gguf", "qwen_gguf", "llm_gguf"):
         for name, probe in (
             ("model_file", _check_model_file),
             ("llama_server", _check_llama_server),

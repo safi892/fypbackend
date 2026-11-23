@@ -33,7 +33,19 @@ fi
 # The default names the checkpoint that ships: five were trained and v3 is the
 # one measured as best. `.env` above overrides it when the weights live
 # elsewhere, which is how a machine short of disk points at one shared copy.
-MODEL="${LLAMA_MODEL_PATH:-models/gguf/qwen-cpp-review-q4_k_m.gguf}"
+if [ -z "${LLAMA_MODEL_PATH:-}" ]; then
+  if [ -f "models/gguf/cpp-review-v3-q4_k_m.gguf" ]; then
+    MODEL="models/gguf/cpp-review-v3-q4_k_m.gguf"
+  elif [ -f "models/gguf/cpp-review-q4_k_m.gguf" ]; then
+    MODEL="models/gguf/cpp-review-q4_k_m.gguf"
+  elif [ -f "models/gguf/qwen-cpp-review-v3-q4_k_m.gguf" ]; then
+    MODEL="models/gguf/qwen-cpp-review-v3-q4_k_m.gguf"
+  else
+    MODEL="models/gguf/qwen-cpp-review-q4_k_m.gguf"
+  fi
+else
+  MODEL="$LLAMA_MODEL_PATH"
+fi
 PORT="${LLAMA_PORT:-8081}"
 THREADS="${LLAMA_THREADS:-8}"
 CONTEXT="${LLAMA_CONTEXT:-4096}"

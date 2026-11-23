@@ -104,12 +104,12 @@ start_server() {
   mkdir -p "$LOG_DIR"
 
   # Only warn about the CodeT5 checkpoint when CodeT5 is the backend actually
-  # selected. The default is qwen_gguf, which never loads that directory, so the
+  # selected. The default is cpp_reviewer_gguf (or qwen_gguf), which never loads that directory, so the
   # old unconditional warning said /analyze would return 503 while /analyze was
   # working - the kind of message that gets believed and then ignored.
-  if [ "${MODEL_BACKEND:-qwen_gguf}" = "codet5" ] && [ ! -d "$MODEL_DIR" ]; then
+  if [ "${MODEL_BACKEND:-cpp_reviewer_gguf}" = "codet5" ] && [ ! -d "$MODEL_DIR" ]; then
     echo "Warning: MODEL_BACKEND=codet5 but its checkpoint is not here: $MODEL_DIR"
-    echo "/analyze will return 503 until it is, or set MODEL_BACKEND=qwen_gguf."
+    echo "/analyze will return 503 until it is, or set MODEL_BACKEND=cpp_reviewer_gguf."
   fi
 
   local port_pids

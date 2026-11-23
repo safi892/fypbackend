@@ -453,20 +453,20 @@ def optimize_checked(
     else:
         target_code = code
 
-    if MODEL_BACKEND == "qwen_gguf":
-        from app.services import qwen_service
+    if MODEL_BACKEND in ("cpp_reviewer_gguf", "qwen_gguf", "llm_gguf"):
+        from app.services import cpp_review_service
 
         try:
             if mode in {"loop", "iterate"}:
-                proposal = qwen_service.iterate(target_code)
+                proposal = cpp_review_service.iterate(target_code)
             elif mode == "dp":
-                proposal = qwen_service.optimize(target_code)
+                proposal = cpp_review_service.optimize(target_code)
             else:
                 if analysis is not None and analysis.recursive:
-                    proposal = qwen_service.iterate(target_code)
+                    proposal = cpp_review_service.iterate(target_code)
                 else:
-                    proposal = qwen_service.optimize(target_code)
-        except qwen_service.LlamaServerUnavailable as exc:
+                    proposal = cpp_review_service.optimize(target_code)
+        except cpp_review_service.LlamaServerUnavailable as exc:
             LOGGER.error("optimizer: llama-server unavailable: %s", exc)
             proposal = ""
     else:
