@@ -26,19 +26,19 @@ from app.schemas.analyze import (
     AnalyzeResponse,
     AnchorStats,
     ChangeExplanation,
-    DiffRow,
     CodeFixEdit,
     CodeValidationRequest,
     CodeValidationResponse,
     DefectFinding,
     DefectsRequest,
     DefectsResponse,
+    DiffRow,
     LineComment,
     OptimizeRequest,
     OptimizeResponse,
     SuggestedFix,
 )
-from app.schemas.history import HistoryListResponse
+from app.schemas.history import HistoryEntry, HistoryListResponse
 from app.services import (
     change_explanation,
     comment_service,
@@ -52,7 +52,12 @@ from app.services import (
 )
 from app.services.analyzer import analyze_code as static_analyze
 from app.services.auth_service import require_user
-from app.services.history_service import list_history, record_history
+from app.services.history_service import (
+    get_history_entry,
+    list_history,
+    record_history,
+    record_optimization,
+)
 
 router = APIRouter()
 
@@ -355,8 +360,14 @@ def optimize(
     :return: the code to show plus the evidence for it.
     :raises HTTPException: 401 if unauthenticated.
     """
+    user = None
     if payload.source != "web":
-        require_user(authorization)
+        user = require_user(authorization)
+    elif authorization:
+        try:
+            user = require_user(authorization)
+        except HTTPException:
+            user = None
 
     try:
         result = optimization_service.optimize_checked(
@@ -378,7 +389,6 @@ def optimize(
     if optimized_code:
         try:
             from app.core.config import MODEL_BACKEND
-
             from app.model_processing.anchors import render_commented_code
             from app.services import cpp_review_service as review_service
 
@@ -450,12 +460,12 @@ def optimize(
         try:
             # Strip ephemeral single-line function labels so full Doxygen docblocks attach cleanly
             import re
-            cleaned_code = re.sub(
-                r"(?m)^[ \t]*//\s*(?:Define the function\s+\w+|Iterative stack rewrite[^\n]*)[ \t]*\n?",
-                "",
-                optimized_code,
+            pattern = (
+                r"(?m)^[ \t]*//\s*(?:Define the function\s+\w+|"
+                r"Iterative stack rewrite[^\n]*)[ \t]*\n?"
             )
-            # Ensure multi-line function documentation comments (/** ... */) are attached above each function
+            cleaned_code = re.sub(pattern, "", optimized_code)
+            # Ensure multi-line function doc comments (/** ... */) attach above functions
             from app.model_processing.anchors import render_commented_code
             from app.model_processing.function_comments import attach_function_doc_comments
             doc_anchors = attach_function_doc_comments(cleaned_code, [], explanation_text)
@@ -465,7 +475,9 @@ def optimize(
                 optimized_code = cleaned_code
         except Exception as exc:
             import logging
-            logging.getLogger(__name__).warning("Failed to attach doc comments on optimize: %s", exc)
+            logging.getLogger(__name__).warning(
+                "Failed to attach doc comments on optimize: %s", exc
+            )
 
     # Say what changed and why. The reasons come from the deterministic checks
     # run against the *original*, not from the model: a line is reported as
@@ -499,7 +511,7 @@ def optimize(
         except Exception:  # noqa: BLE001 - explaining a rewrite must never fail one
             changes, changes_summary, diff = [], "", []
 
-    return OptimizeResponse(
+    response = OptimizeResponse(
         input_code=payload.code.strip(),
         code=optimized_code,
         changed=result.changed,
@@ -512,6 +524,21 @@ def optimize(
         commented_code=commented_code or optimized_code,
         diff=diff,
     )
+
+    if user is not None:
+        record_optimization(
+            user_id=user.id,
+            input_code=payload.code.strip(),
+            optimized_code=optimized_code,
+            optimization_verified=result.verified,
+            speedup=round(result.speedup, 2),
+            optimization_note=result.note,
+            commented_code=commented_code or optimized_code,
+            explanation=explanation_text,
+            source=payload.source,
+        )
+
+    return response
 
 
 @router.get(
@@ -538,3 +565,26 @@ def analyze_history(
     user = require_user(authorization)
     items, total = list_history(user_id=user.id, limit=limit, offset=offset)
     return HistoryListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get(
+    "/analyze/history/{entry_id}",
+    response_model=HistoryEntry,
+    dependencies=[Depends(bearer_scheme)],
+)
+def analyze_history_detail(
+    entry_id: int,
+    authorization: str | None = Header(default=None),
+) -> HistoryEntry:
+    """Return a single history entry by ID for the authenticated user.
+
+    :param entry_id: ID of the history record.
+    :param authorization: bearer token header.
+    :return: HistoryEntry item with optimization fields.
+    :raises HTTPException: 401 if unauthenticated, 404 if not found.
+    """
+    user = require_user(authorization)
+    entry = get_history_entry(user_id=user.id, entry_id=entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="History entry not found")
+    return entry

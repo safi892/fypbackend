@@ -79,3 +79,37 @@ Authorization: Bearer your-session-token
 ```
 
 If the token is removed from local storage, treat the user as logged out on the device.
+
+## History & Optimization Flow
+
+To display past reviews in the Documentation screen:
+
+Call `GET /analyze/history?limit=20&offset=0` (or `GET /analyze/history/{id}` for single item detail):
+
+```kotlin
+data class HistoryEntry(
+    val id: Int,
+    @SerializedName("input_code") val inputCode: String,
+    @SerializedName("commented_code") val commentedCode: String,
+    val explanation: String,
+    val source: String?,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("optimized_code") val optimizedCode: String?,
+    @SerializedName("optimization_verified") val optimizationVerified: Boolean?,
+    val speedup: Double?,
+    @SerializedName("optimization_note") val optimizationNote: String?
+)
+
+data class HistoryListResponse(
+    val items: List<HistoryEntry>,
+    val total: Int,
+    val limit: Int,
+    val offset: Int
+)
+```
+
+UI rendering logic:
+- If `optimizedCode != null`, render the "Optimized" toggle.
+- If `optimizationVerified == true`, render the "Verified" badge.
+- If `speedup != null && speedup > 1.0`, render `"⚡ ${speedup}x"`.
+

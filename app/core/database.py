@@ -57,10 +57,29 @@ def initialize_database() -> None:
                     explanation TEXT NOT NULL,
                     source TEXT,
                     created_at TEXT NOT NULL,
+                    optimized_code TEXT,
+                    optimization_verified INTEGER,
+                    speedup REAL,
+                    optimization_note TEXT,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
                 )
                 """
             )
+            # Idempotent migration for existing database instances
+            cols_cursor = connection.execute("PRAGMA table_info(analysis_history)").fetchall()
+            existing_cols = {row["name"] for row in cols_cursor}
+            if "optimized_code" not in existing_cols:
+                connection.execute("ALTER TABLE analysis_history ADD COLUMN optimized_code TEXT")
+            if "optimization_verified" not in existing_cols:
+                connection.execute(
+                    "ALTER TABLE analysis_history ADD COLUMN optimization_verified INTEGER"
+                )
+            if "speedup" not in existing_cols:
+                connection.execute("ALTER TABLE analysis_history ADD COLUMN speedup REAL")
+            if "optimization_note" not in existing_cols:
+                connection.execute(
+                    "ALTER TABLE analysis_history ADD COLUMN optimization_note TEXT"
+                )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_analysis_history_user_id

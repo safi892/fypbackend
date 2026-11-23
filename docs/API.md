@@ -348,12 +348,42 @@ Authorization: Bearer <session_token>
       "commented_code": "/** ... */\nint add(int a, int b) { ... }",
       "explanation": "Purpose: Adds two numbers.",
       "created_at": "2026-10-03T14:10:00Z",
-      "source": "web"
+      "source": "android",
+      "optimized_code": "int add(int a, int b) { return a + b; }",
+      "optimization_verified": true,
+      "speedup": 1.0,
+      "optimization_note": "No recursion detected."
     }
   ],
   "total": 1,
   "limit": 20,
   "offset": 0
+}
+```
+
+---
+
+### `GET /analyze/history/{id}`
+Retrieves a single historical code review record by its `id` for the authenticated user, including full optimization data.
+
+#### Headers
+```text
+Authorization: Bearer <session_token>
+```
+
+#### Response (`200 OK`)
+```json
+{
+  "id": 12,
+  "input_code": "int add(int a, int b) { return a + b; }",
+  "commented_code": "/** ... */\nint add(int a, int b) { ... }",
+  "explanation": "Purpose: Adds two numbers.",
+  "created_at": "2026-10-03T14:10:00Z",
+  "source": "android",
+  "optimized_code": "int add(int a, int b) { return a + b; }",
+  "optimization_verified": true,
+  "speedup": 1.0,
+  "optimization_note": "No recursion detected."
 }
 ```
 
